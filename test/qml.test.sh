@@ -57,8 +57,18 @@ test_stderr_helfer_nutzt_prozess_substitution_keine_pipe() {
 
 test_abbau_deckt_jeden_erklaerten_prozess() {
   declared="$(grep -oE 'id: [a-zA-Z]+Proc' "$ROOT/Panel.qml" | awk '{print $2}' | sort -u)"
+  # Gefunden durch Mutationsprobe (Task 7): "|| true" ist noetig, nicht nur
+  # Stil. Diese Datei setzt "pipefail", und run_tests fuehrt jeden Test
+  # zusaetzlich unter "set -e" aus (beides bleibt in der Subshell aktiv).
+  # Ist der Abbau in Component.onDestruction leer (die Mutation, die dieser
+  # Test finden soll), liefert "grep -oE '[a-zA-Z]+Proc'" null Treffer und
+  # damit Exit 1 -- unter pipefail reisst das die ganze Pipeline-Zuweisung
+  # mit, und "set -e" beendet die Testfunktion sofort an dieser Stelle, VOR
+  # dem "assert_eq" unten. Der Test bleibt zwar FAIL (run_tests sieht den
+  # von 0 verschiedenen Exit-Status auch so), aber ganz ohne die
+  # "erwartet/erhalten"-Meldung -- rot aus dem richtigen Grund, aber stumm.
   stopped="$(sed -n '/Component.onDestruction/,/^  }/p' "$ROOT/Panel.qml" \
-             | grep -oE '[a-zA-Z]+Proc' | sort -u)"
+             | grep -oE '[a-zA-Z]+Proc' | sort -u || true)"
   assert_eq "$declared" "$stopped"
 }
 

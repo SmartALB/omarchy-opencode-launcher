@@ -156,6 +156,27 @@ test_symlink_als_zustandsdatei_wird_abgelehnt() {
   [ -L "$(statefile)" ] || fail "der Symlink wurde ersetzt statt abgelehnt"
 }
 
+# Gefunden durch Mutationsprobe (Task 7): der Test oben zielt auf
+# "/dev/null" als Symlink-Ziel -- das ist selbst KEINE einfache Datei, also
+# faengt die nachfolgende, symlink-unabhaengige "[ -f "$STATE" ]"-Pruefung
+# diesen Fall auch dann noch ab, wenn die eigentliche Symlink-Pruefung
+# ("[ ! -L "$STATE" ]") versehentlich entfernt wuerde -- der Test oben
+# bestuende also selbst dann noch. Ein Symlink auf eine ECHTE, regulaere
+# Datei mit gueltigem Zustands-JSON umgeht das: "-f" ist dafuer wahr, und
+# nur die eigentliche Symlink-Pruefung verhindert dann noch, dass load()
+# durch den Symlink hindurch fremden Inhalt liest bzw. publish() ihn per
+# "mv -f" ersetzt. Ohne die Symlink-Pruefung liefe "set" hier durch (Exit 0)
+# statt mit Exit 6 abzulehnen.
+test_symlink_auf_echte_datei_wird_ebenfalls_abgelehnt() {
+  d="$(dirname "$(statefile)")"; mkdir -p "$d"
+  printf '%s' '{"schemaVersion":1,"projects":{},"starred":["fremd"]}' > "$SANDBOX/echtes-ziel.json"
+  ln -s "$SANDBOX/echtes-ziel.json" "$(statefile)"
+  rc=0; "$STORE" set /p/eins openai/a >/dev/null 2>&1 || rc=$?
+  assert_status "$rc" 6
+  [ -L "$(statefile)" ] || fail "der Symlink wurde ersetzt statt abgelehnt"
+  assert_eq "$(cat "$SANDBOX/echtes-ziel.json")" '{"schemaVersion":1,"projects":{},"starred":["fremd"]}'
+}
+
 test_zustandsdatei_ueber_der_grenze_wird_abgelehnt() {
   d="$(dirname "$(statefile)")"; mkdir -p "$d"
   head -c 1048577 /dev/zero | tr '\0' 'a' > "$(statefile)"
