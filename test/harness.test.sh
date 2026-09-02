@@ -114,4 +114,60 @@ SUITE_B
   assert_not_contains "$out" "a_echter_fehlschlag.test.sh (Exit"
 }
 
+# Ruling 29: der Leck-Check selbst hatte einen Konstruktionsfehler -- er
+# beobachtete den ganzen Baum unter "$HOME/.config/omarchy", aber das
+# Plugin-Repository liegt selbst genau darunter
+# ("$HOME/.config/omarchy/plugins/smartalb.opencode"). Jeder "git commit"
+# schreibt ".git/index", ".git/HEAD" und neue Objekte in diesen Baum, und
+# der Check meldete das als SANDBOX-LECK der eigenen Versionsverwaltung --
+# ebenso jede Aenderung an irgendeinem ANDEREN Plugin unter ".../plugins/".
+# Zwei Belege: der Check muss weiterhin einen echten Treffer in
+# $REAL_STATE finden, darf aber auf Aktivitaet irgendwo unter
+# ".../plugins/" nicht mehr anspringen. Wie bei der SUITE-FEHLER-Suite oben
+# wird die echte, kopierte test/run.sh gegen eine Wegwerf-Suite laufen
+# gelassen -- kein Nachbau ihres Textes.
+test_leck_in_der_echten_zustandsdatei_wird_weiterhin_gemeldet() {
+  proj="$SANDBOX/proj"
+  mkdir -p "$proj/test/lib"
+  cp "$DIR/run.sh" "$proj/test/run.sh"
+  cp "$HARNESS" "$proj/test/lib/harness.sh"
+  # Bewusst OHNE harness.sh/run_tests in dieser Wegwerf-Suite: sie soll
+  # direkt und ohne eigene setup_sandbox-Verschachtelung in das $REAL_STATE
+  # schreiben, das die kopierte test/run.sh oben (aus UNSERER Umgebung,
+  # also der Sandbox von test_leck_...) berechnet -- genau das Muster, das
+  # der urspruengliche Task-1-Probe unbeabsichtigt gezeigt hat.
+  cat > "$proj/test/a_leck.test.sh" <<'SUITE_LECK'
+#!/usr/bin/env bash
+set -uo pipefail
+mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/smartalb-opencode"
+: > "${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/smartalb-opencode/leck.txt"
+SUITE_LECK
+  rc=0; out="$(bash "$proj/test/run.sh" 2>&1)" || rc=$?
+  assert_contains "$out" "SANDBOX-LECK"
+  [ "$rc" -ne 0 ] || fail "erwartet: von 0 verschiedener Exit-Status" "erhalten: 0"
+}
+
+test_aktivitaet_unter_plugins_loest_kein_leck_mehr_aus() {
+  proj="$SANDBOX/proj"
+  mkdir -p "$proj/test/lib"
+  cp "$DIR/run.sh" "$proj/test/run.sh"
+  cp "$HARNESS" "$proj/test/lib/harness.sh"
+  # Simuliert genau das, was ein "git commit" im eigenen Plugin-Repo (oder
+  # eine Aenderung an einem beliebigen ANDEREN Plugin) unter
+  # ".../plugins/" hinterlassen wuerde: eine Datei erscheint und
+  # verschwindet wieder, ausserhalb jedes echten Plugin-Verzeichnisses
+  # (".leak-probe-tmp", nicht z.B. "smartalb.vpn").
+  cat > "$proj/test/a_plugin_aktivitaet.test.sh" <<'SUITE_PLUGIN'
+#!/usr/bin/env bash
+set -uo pipefail
+d="$HOME/.config/omarchy/plugins/.leak-probe-tmp"
+mkdir -p "$d"
+: > "$d/somefile"
+rm -rf "$d"
+SUITE_PLUGIN
+  rc=0; out="$(bash "$proj/test/run.sh" 2>&1)" || rc=$?
+  assert_not_contains "$out" "SANDBOX-LECK"
+  assert_status "$rc" 0
+}
+
 run_tests

@@ -8,13 +8,30 @@ export SANDBOX_ERR="$(mktemp)"
 
 REAL_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/smartalb-opencode"
 REAL_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/smartalb.opencode"
-REAL_CFG="$HOME/.config/omarchy"
+# Ruling 29: KEIN Sweep von "$HOME/.config/omarchy" mehr -- dieses Plugin
+# liegt selbst unter "$HOME/.config/omarchy/plugins/smartalb.opencode", und
+# jeder normale "git commit" waehrend der Entwicklung schreibt ".git/index",
+# ".git/HEAD" und neue Objekte GENAU in diesen beobachteten Baum. Der
+# Sweep meldete deshalb die eigene Versionsverwaltung als SANDBOX-LECK --
+# und jede Aenderung an irgendeinem ANDEREN Plugin unter ".../plugins/"
+# ebenso. Deshalb hier bewusst eine Aufzaehlung der drei konkreten Dateien,
+# die eines unserer Skripte im echten Config-Verzeichnis ueberhaupt
+# anfassen koennte, statt eines Verzeichnis-Sweeps -- WER DAS "VERBESSERT"
+# UND WIEDER ZU EINEM SWEEP MACHT, HOLT DIESEN FALSCH-POSITIV ZURUECK. Ein
+# falscher Alarm ist schlimmer als gar keine Pruefung: er lehrt, die
+# Meldung zu ignorieren. $REAL_STATE und $REAL_CACHE bleiben Verzeichnis-
+# Sweeps, weil diese beiden Verzeichnisse ausschliesslich diesem Plugin
+# gehoeren -- eine Datei dort ist immer ein echtes Leck.
+REAL_CFG_FILES=(
+  "$HOME/.config/omarchy/opencode-launcher.json"
+  "$HOME/.config/omarchy/opencode-projects.json"
+  "$HOME/.config/omarchy/shell.json"
+)
 
 # Eine Markerdatei statt eines Zeitfensters: "-newermt '-1 second'" erwischt
 # nur einen Schreibzugriff in der letzten Sekunde vor der Pruefung und wuerde
 # genau das Leck verfehlen, das diese Pruefung finden soll. Der Marker muss
-# vor der ersten Suite entstehen; $REAL_CFG enthaelt legitim Dateien anderer
-# Plugins, daher zaehlt nur, was juenger als der Marker ist.
+# vor der ersten Suite entstehen.
 marker="$(mktemp)"
 
 total_pass=0; total_fail=0
@@ -45,7 +62,7 @@ for suite in test/*.test.sh; do
   fi
 done
 
-leaked="$(find "$REAL_STATE" "$REAL_CACHE" "$REAL_CFG" -newer "$marker" 2>/dev/null | sort)"
+leaked="$(find "$REAL_STATE" "$REAL_CACHE" "${REAL_CFG_FILES[@]}" -newer "$marker" 2>/dev/null | sort)"
 if [ -n "$leaked" ]; then
   printf '\nSANDBOX-LECK: eine Suite hat echte Dateien angefasst:\n%s\n' "$leaked" >&2
   exit 2
