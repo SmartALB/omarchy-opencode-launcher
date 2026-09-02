@@ -171,7 +171,7 @@ test_kaputte_config_liefert_gueltiges_json_und_meldet_es() {
   assert_status "$rc" 9
 }
 
-test_fehlendes_sqlite3_laesst_gepinnte_projekte_funktionieren() {
+test_fehlendes_sqlite3_ueberspringt_den_unterprozess_ganz() {
   setup_common
   mkdir -p "$SANDBOX/a"
   write_config "{\"projects\":[{\"name\":\"A\",\"path\":\"$SANDBOX/a\"}]}"
@@ -179,8 +179,22 @@ test_fehlendes_sqlite3_laesst_gepinnte_projekte_funktionieren() {
   # Entfernen aus dem PATH waere wirkungslos, weil absolut aufgerufen wird.
   export SQLITE_BIN="$SANDBOX/gibtsnicht"
   export OPENCODE_DB="$SANDBOX/oc.db"; : > "$OPENCODE_DB"
+  # Ruling 24: "die Zeile bleibt sichtbar, weil der Prozess fehlschlaegt"
+  # beweist nicht, dass der command-v-Wachposten je gegriffen hat -- ein
+  # fehlgeschlagener Unterprozess UND ein uebersprungener Unterprozess sehen
+  # im Ergebnis gleich aus. timeout wird als protokollierender Doppelgaenger
+  # eingesetzt (auch der hyprctl-Aufruf laeuft ueber ihn), damit sich
+  # zaehlen laesst, ob der sqlite3-Pfad ueberhaupt je bei ihm ankam.
+  make_stub timeout 'exit 0'
+  export TIMEOUT_BIN="$SANDBOX/stub/timeout"
   out="$("$PROJ" list --json)"
   assert_eq "$(printf '%s' "$out" | jq -r 'length')" "1"
+  assert_eq "$(printf '%s' "$out" | jq -r '.[0].name')" "A"
+  # Nicht stub_calls (zaehlt JEDEN timeout-Aufruf, auch den fuer hyprctl) --
+  # nur die Zeilen zaehlen, die den sqlite3-Pfad nennen. Das ist genau die
+  # Bedingung, die der command-v-Wachposten verhindern soll.
+  sqlite_calls="$(stub_log timeout | grep -c -- "$SQLITE_BIN" || true)"
+  assert_eq "$sqlite_calls" "0"
 }
 
 test_config_ueber_der_grenze_wird_abgelehnt() {
@@ -216,6 +230,35 @@ test_symlink_am_cache_pfad_wird_abgelehnt() {
   out="$("$PROJ" list --json)" || rc=$?
   assert_eq "$(printf '%s' "$out" | jq -r '.error')" "cache-not-a-file"
   assert_status "$rc" 6
+}
+
+# Beim Schreiben des sqlite3-Tests fuer Ruling 24 fiel auf: ein Doppelgaenger
+# fuer hyprctl/timeout, der gar nichts ausgibt, liess "classes" als leeren
+# String statt "[]" stehen und riss den letzten jq-Aufruf mit "invalid JSON
+# text passed to --argjson" mit runter -- keine Fehlermeldung im JSON, nur
+# ein Absturz. Zwei Regressionstests dagegen: eine leere hyprctl-Antwort und
+# eine 0-Byte-Cache-Datei duerfen das Ergebnis nicht sprengen.
+test_leere_hyprctl_antwort_stuerzt_das_jq_nicht_ab() {
+  setup_common
+  mkdir -p "$SANDBOX/a"
+  write_config "{\"projects\":[{\"name\":\"A\",\"path\":\"$SANDBOX/a\"}]}"
+  make_stub hyprctl 'exit 0'
+  export HYPRCTL_BIN="$SANDBOX/stub/hyprctl"
+  out="$("$PROJ" list --json)"
+  assert_eq "$(printf '%s' "$out" | jq -r 'length')" "1"
+  assert_eq "$(printf '%s' "$out" | jq -r '.[0].running')" "false"
+}
+
+test_leere_cache_datei_stuerzt_das_jq_nicht_ab() {
+  setup_common
+  mkdir -p "$SANDBOX/a"
+  write_config "{\"projects\":[{\"name\":\"A\",\"path\":\"$SANDBOX/a\"}]}"
+  "$STORE" set "$SANDBOX/a" lmstudio/openai/gpt-oss-20b >/dev/null
+  mkdir -p "$XDG_CACHE_HOME/omarchy/smartalb.opencode"
+  : > "$XDG_CACHE_HOME/omarchy/smartalb.opencode/models.json"
+  out="$("$PROJ" list --json)"
+  assert_eq "$(printf '%s' "$out" | jq -r 'length')" "1"
+  assert_eq "$(printf '%s' "$out" | jq -r '.[0].modelKnown')" "true"
 }
 
 run_tests

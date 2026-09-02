@@ -70,8 +70,16 @@ fi
 
 known='[]'
 if [ -f "$CACHE" ]; then
+  # "-ce" statt blossem "-c || echo '[]'": jq liest bei leerem stdin
+  # (z.B. eine 0-Byte-Cache-Datei) NULL Dokumente ein, wendet den Filter
+  # nie an, gibt nichts aus und beendet sich trotzdem mit Erfolg -- das
+  # "|| echo '[]'"-Netz greift dann nicht, "known" bliebe ein leerer
+  # String, und der abschliessende --argjson-Aufruf stuerzte mit "invalid
+  # JSON text" ab. "-e" macht daraus verlaesslich einen Fehlschlag (Exit 4,
+  # "kein Ergebnis"), den die Kette hier auffaengt.
   c="$(read_capped "$CACHE" "$MAX_FILE")" \
-    && known="$(printf '%s' "$c" | "$BIN_JQ" -c '[(.models // [])[].id]' 2>/dev/null || echo '[]')"
+    && k="$(printf '%s' "$c" | "$BIN_JQ" -ce '[(.models // [])[].id]' 2>/dev/null)" \
+    && known="$k"
 fi
 
 # --- Pfade sammeln: gepinnt, dann Recents, gekappt VOR allem Weiteren --------
@@ -110,8 +118,14 @@ fi
 # --- Ein hyprctl-Aufruf, nach der Kappung ------------------------------------
 classes='[]'
 if command -v "$BIN_HYPRCTL" >/dev/null 2>&1; then
+  # Dieselbe "-ce"-Absicherung wie beim Modell-Cache oben: eine leere
+  # hyprctl-Antwort (Timeout, Absturz, oder -- wie im Test fuer Ruling 24 --
+  # ein Doppelgaenger, der nichts ausgibt) fuehrt sonst zu einem leeren
+  # "classes"-String statt "[]" und reisst den letzten jq-Aufruf mit "invalid
+  # JSON text passed to --argjson" mit runter.
   h="$("$BIN_TIMEOUT" 5 "$BIN_HYPRCTL" clients -j 2>/dev/null | read_stream_capped "$MAX_FILE")" \
-    && classes="$(printf '%s' "$h" | "$BIN_JQ" -c '[.[].class // empty]' 2>/dev/null || echo '[]')"
+    && c="$(printf '%s' "$h" | "$BIN_JQ" -ce '[.[].class // empty]' 2>/dev/null)" \
+    && classes="$c"
 fi
 
 # --- Ein jq-Aufruf baut die Antwort -----------------------------------------
