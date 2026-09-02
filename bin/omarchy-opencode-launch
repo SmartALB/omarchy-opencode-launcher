@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Oeffnet opencode im Projektverzeichnis, mit dem gewaehlten Modell, oder
+# fokussiert das bereits laufende Fenster dieses Projekts.
+#
+# Usage: omarchy-opencode-launch <dir> [--model ID] [--agent N] [--continue] [--new-window]
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/_common.sh"
+
+ME="$(basename "$0")"
+LOF="${OMARCHY_LAUNCH_OR_FOCUS:-omarchy-launch-or-focus}"
+
+usage() { echo "Usage: $ME <dir> [--model ID] [--agent NAME] [--continue] [--new-window]" >&2; exit 1; }
+
+[ $# -ge 1 ] || usage
+dir="$(expand_path "$1")"; shift
+model=""; agent=""; cont=false; newwin=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --model) [ $# -ge 2 ] || usage; model="$2"; shift 2 ;;
+    --agent) [ $# -ge 2 ] || usage; agent="$2"; shift 2 ;;
+    --continue) cont=true; shift ;;
+    --new-window) newwin=true; shift ;;
+    *) usage ;;
+  esac
+done
+
+[ -d "$dir" ] || { echo "$ME: kein Verzeichnis: $dir" >&2; exit 2; }
+
+OPENCODE="${OPENCODE_BIN:-$(command -v opencode 2>/dev/null || true)}"
+[ -n "$OPENCODE" ] && [ -x "$OPENCODE" ] || { echo "$ME: opencode ist nicht installiert" >&2; exit 3; }
+
+# Vor dem Bauen der Zeile pruefen, nicht danach: eine kaputte ID darf nicht
+# in eine eval-Zeile geraten.
+if [ -n "$model" ]; then
+  valid_model_id "$model" || { echo "$ME: ungueltige Modell-ID: $model" >&2; exit 4; }
+fi
+if [ -n "$agent" ]; then
+  valid_agent_name "$agent" || { echo "$ME: ungueltiger Agentenname: $agent" >&2; exit 5; }
+fi
+
+app_id="$(app_id_for "$dir")"
+
+# omarchy-launch-or-focus fuehrt sein zweites Argument per eval aus. Jeder
+# eingesetzte Wert muss daher durch printf %q -- ein Projektpfad mit
+# Leerzeichen zerfiele sonst in zwei Argumente.
+cmd="setsid uwsm-app -- xdg-terminal-exec"
+cmd="$cmd --app-id=$(printf %q "$app_id")"
+cmd="$cmd --dir=$(printf %q "$dir")"
+cmd="$cmd -e opencode"
+[ -n "$model" ] && cmd="$cmd -m $(printf %q "$model")"
+[ -n "$agent" ] && cmd="$cmd --agent $(printf %q "$agent")"
+[ "$cont" = true ] && cmd="$cmd -c"
+
+# stdin/stdout/stderr werden abgekoppelt. Ohne das erbt das gestartete
+# Terminal die Pipes des Aufrufers; startet Quickshell dieses Skript aus
+# einem Process-Objekt, raeumt es die Pipes ab, sobald die Kette endet -- und
+# nimmt das Terminal mit. Das Symptom ist tueckisch: systemd meldet
+# "Started xdg-terminal-exec", das Skript endet mit 0, und es erscheint nie
+# ein Fenster. Die Pruefungen oben laufen vorher und bleiben sichtbar.
+#
+# Ruling 2: /usr/bin/bash statt /usr/bin/env bash -- env loest den
+# Interpreter ueber den PATH auf, und genau das soll bei einem Interpreter
+# nie passieren, auch nicht innerhalb einer bash -c-Zeile (Ruling 21).
+if [ "$newwin" = true ]; then
+  exec /usr/bin/bash -c "$cmd" </dev/null >/dev/null 2>&1
+fi
+exec "$LOF" "$app_id" "$cmd" </dev/null >/dev/null 2>&1
