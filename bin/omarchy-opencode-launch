@@ -38,15 +38,33 @@ if [ -n "$agent" ]; then
   valid_agent_name "$agent" || { echo "$ME: ungueltiger Agentenname: $agent" >&2; exit 5; }
 fi
 
-app_id="$(app_id_for "$dir")"
+# Ruling 33: die App-Id haengt am Slug von app_id_for ab, und der wiederum
+# am Pfad-Text selbst -- "." und "/abs/proj" ergeben zwei verschiedene
+# App-Ids fuer dasselbe Projekt, und Fokussieren oeffnet dann still ein
+# zweites Fenster statt das erste zu finden. Deshalb nur fuer die App-Id
+# kanonisieren (cd + pwd -P); der Pfad, der unten an --dir uebergeben wird,
+# bleibt wie eingegeben -- das betrifft Anzeige/Funktion, nicht Identitaet.
+canon_dir="$(cd "$dir" && pwd -P)" || canon_dir="$dir"
+app_id="$(app_id_for "$canon_dir")"
 
 # omarchy-launch-or-focus fuehrt sein zweites Argument per eval aus. Jeder
 # eingesetzte Wert muss daher durch printf %q -- ein Projektpfad mit
 # Leerzeichen zerfiele sonst in zwei Argumente.
+#
+# Das doppelte setsid ist beabsichtigt: der Empfaenger fuehrt selbst
+# "eval exec setsid $LAUNCH_COMMAND" aus, umschliesst unser "setsid
+# uwsm-app -- ..." also noch mit einem eigenen. Der --new-window-Pfad weiter
+# unten laeuft nie durch den Empfaenger und braucht sein eigenes setsid, um
+# die neue Sitzung selbst abzuloesen.
 cmd="setsid uwsm-app -- xdg-terminal-exec"
 cmd="$cmd --app-id=$(printf %q "$app_id")"
 cmd="$cmd --dir=$(printf %q "$dir")"
-cmd="$cmd -e opencode"
+# Ruling 31: das gepruefte Programm ist auch das gestartete -- bare "opencode"
+# wuerde in der frischen uwsm-app/systemd-Unit erneut per PATH gesucht, das
+# dort aber nicht zwingend denselben Eintrag (z.B. ~/.local/bin) enthaelt wie
+# die Shell dieses Skripts. Ohne diese Zeile waere OPENCODE_BIN nur fuer die
+# Existenzpruefung wirksam, nie fuer den tatsaechlichen Start.
+cmd="$cmd -e $(printf %q "$OPENCODE")"
 [ -n "$model" ] && cmd="$cmd -m $(printf %q "$model")"
 [ -n "$agent" ] && cmd="$cmd --agent $(printf %q "$agent")"
 [ "$cont" = true ] && cmd="$cmd -c"
