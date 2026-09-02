@@ -62,15 +62,25 @@ Item {
   // existiert. bin/omarchy-opencode-models setzt "error" IMMER zusammen mit
   // "models: []" -- ein Fehlercode und eine gleichzeitig nutzbare
   // Modell-Liste schliessen sich also gegenseitig aus.
+  //
+  // Ruling 47: alle Zeichenketten, die ein Benutzer liest, sind englisch;
+  // die Kommentare bleiben deutsch. Grund ist die Konsistenz mit dem
+  // veroeffentlichten Schwesterwidget smartalb.vpn und mit dem Publikum
+  // des Marktplatzes.
   readonly property string statusText: {
-    if (sheet.errorCode === "opencode-missing") return "opencode ist nicht installiert oder nicht ausfuehrbar"
-    if (sheet.errorCode === "models-unavailable") return "opencode war nicht erreichbar, kein Zwischenspeicher vorhanden"
-    if (sheet.errorCode === "models-too-large") return "Die Modell-Liste war zu gross, kein brauchbarer Zwischenspeicher vorhanden"
-    if (sheet.errorCode === "cache-too-large") return "Der Zwischenspeicher selbst ist zu gross geworden"
-    if (sheet.errorCode === "cache-not-a-file") return "Der Zwischenspeicher-Pfad ist kein normaler Ordnereintrag (evtl. ein Symlink)"
-    if (sheet.errorCode !== "") return "Modell-Liste nicht lesbar"
-    if (sheet.stale) return "Liste aus dem Zwischenspeicher -- opencode war nicht erreichbar"
-    if (sheet.models.length === 0) return "Keine Modelle gefunden"
+    if (sheet.errorCode === "opencode-missing") return "opencode is not installed or not executable"
+    if (sheet.errorCode === "models-unavailable") return "opencode was unreachable, and there is no cached list"
+    if (sheet.errorCode === "models-too-large") return "The model list was too large, and there is no usable cached list"
+    if (sheet.errorCode === "cache-too-large") return "The cached model list has grown too large"
+    // C4: bislang meldete das Skript auch fuer einen bloss UNLESBAREN
+    // Zwischenspeicher "cache-too-large" -- eine 13 Byte grosse Datei mit
+    // chmod 000 kam als "zu gross" an. Der eigene Code braucht seinen
+    // eigenen Satz.
+    if (sheet.errorCode === "cache-unreadable") return "The cached model list cannot be read (check its permissions)"
+    if (sheet.errorCode === "cache-not-a-file") return "The model cache path is not a regular file (a symlink, perhaps)"
+    if (sheet.errorCode !== "") return "Model list not readable"
+    if (sheet.stale) return "List from the cache -- opencode was unreachable"
+    if (sheet.models.length === 0) return "No models found"
     return ""
   }
 
@@ -97,8 +107,6 @@ Item {
     hoverEnabled: true
   }
 
-  Keys.onEscapePressed: sheet.closed()
-
   Item {
     id: col
     anchors.fill: parent
@@ -114,7 +122,7 @@ Item {
       TextField {
         id: search
         width: parent.width
-        placeholderText: "Modell suchen"
+        placeholderText: "Search models"
         foreground: sheet.fg
         onTextChanged: sheet.filter = text
 
@@ -161,6 +169,23 @@ Item {
         width: parent.width
         visible: sheet.statusText !== ""
         text: sheet.statusText
+        color: sheet.fg
+        font.family: sheet.fontFam
+        font.pixelSize: Style.font.caption
+        opacity: 0.75
+        wrapMode: Text.WordWrap
+      }
+
+      // C2: Keys.onReturnPressed oben nimmt einen frei getippten Text als
+      // Modell-ID, sobald die Trefferliste leer ist -- Spezifikation 5
+      // versprach den Hinweis darauf ausdruecklich, und keine Stelle nannte
+      // ihn. Genau die gleiche Bedingung wie dort ("shown.length === 0"),
+      // damit der Hinweis erscheint, wenn er zutrifft: bei leerer oder
+      // fehlerhafter Liste ebenso wie bei einer Sucheingabe ohne Treffer.
+      Text {
+        width: parent.width
+        visible: sheet.shown.length === 0
+        text: "You can also type a full model id (provider/model) and press Enter."
         color: sheet.fg
         font.family: sheet.fontFam
         font.pixelSize: Style.font.caption
@@ -223,7 +248,7 @@ Item {
           anchors.rightMargin: Style.spacing.xs
           size: Style.space(22)
           iconText: modelData.starred ? "\u2605" : "\u2606"
-          tooltipText: modelData.starred ? "Stern entfernen" : "Favorisieren"
+          tooltipText: modelData.starred ? "Remove star" : "Add star"
           foreground: sheet.fg
           fontFamily: sheet.fontFam
           enabled: !sheet.busy
@@ -259,7 +284,7 @@ Item {
 
       Text {
         anchors.centerIn: parent
-        text: "Voreinstellung von opencode benutzen"
+        text: "Use opencode's own default"
         color: sheet.fg
         font.family: sheet.fontFam
         font.pixelSize: Style.font.body

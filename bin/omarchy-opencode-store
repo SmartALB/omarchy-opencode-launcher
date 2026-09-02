@@ -12,7 +12,7 @@ STATE="$STATE_DIR/projects.json"
 EMPTY='{"schemaVersion":1,"projects":{},"starred":[]}'
 
 usage() {
-  echo "Usage: $ME get|unset <pfad> | set <pfad> <modell> | star|unstar <modell> | stars" >&2
+  echo "Usage: $ME get|unset <path> | set <path> <model> | star|unstar <model> | stars" >&2
   exit 1
 }
 
@@ -20,16 +20,16 @@ usage() {
 load() {
   [ -e "$STATE" ] || { printf '%s' "$EMPTY"; return 0; }
   # Kein Symlink: wer ihn setzen kann, bestimmt sonst das Ziel des Schreibens.
-  [ ! -L "$STATE" ] || { echo "$ME: $STATE ist ein Symlink" >&2; return 6; }
-  [ -f "$STATE" ] || { echo "$ME: $STATE ist keine einfache Datei" >&2; return 6; }
+  [ ! -L "$STATE" ] || { echo "$ME: $STATE is a symlink" >&2; return 6; }
+  [ -f "$STATE" ] || { echo "$ME: $STATE is not a regular file" >&2; return 6; }
   local data rc
   data="$(read_capped "$STATE" "$MAX_FILE")" || { rc=$?
-    [ "$rc" = 8 ] && echo "$ME: $STATE ist groesser als $MAX_FILE Bytes" >&2
+    [ "$rc" = 8 ] && echo "$ME: $STATE is larger than $MAX_FILE bytes" >&2
     return "$rc"; }
   local ver
   ver="$(printf '%s' "$data" | "$BIN_JQ" -r '.schemaVersion // 0' 2>/dev/null)" \
-    || { echo "$ME: $STATE ist kein gueltiges JSON" >&2; return 9; }
-  [ "$ver" = "1" ] || { echo "$ME: unbekannte schemaVersion $ver" >&2; return 7; }
+    || { echo "$ME: $STATE is not valid JSON" >&2; return 9; }
+  [ "$ver" = "1" ] || { echo "$ME: unknown schemaVersion $ver" >&2; return 7; }
   printf '%s' "$data"
 }
 
@@ -37,13 +37,13 @@ load() {
 publish() {
   local tmp
   mkdir -p "$STATE_DIR" || return 1
-  [ ! -L "$STATE" ] || { echo "$ME: $STATE ist ein Symlink" >&2; return 6; }
+  [ ! -L "$STATE" ] || { echo "$ME: $STATE is a symlink" >&2; return 6; }
   # Ruling 13: waere $STATE in diesem Moment z.B. ein Verzeichnis, wuerde
   # "mv -f tmp $STATE" die Temporaerdatei still HINEIN verschieben und mit
   # Erfolg zurueckkehren -- die Zustandsdatei selbst bliebe dabei ungeschrieben,
   # ohne dass irgendein Fehler gemeldet wuerde. Nicht existieren bleibt
   # erlaubt: das ist der normale Fall beim allerersten Schreiben.
-  [ ! -e "$STATE" ] || [ -f "$STATE" ] || { echo "$ME: $STATE ist keine einfache Datei" >&2; return 6; }
+  [ ! -e "$STATE" ] || [ -f "$STATE" ] || { echo "$ME: $STATE is not a regular file" >&2; return 6; }
   # ".tmp." im Namen, nicht nur eine Punkt-Praefix-Konvention: Task 2's
   # eigener Test sucht Leichen mit "find -name '*.tmp*'" -- ein Name ohne
   # dieses Teilwort wuerde einen liegen gebliebenen Rest unsichtbar machen
@@ -73,7 +73,7 @@ case "$cmd" in
     ;;
   set)
     [ $# -eq 3 ] || usage
-    valid_model_id "$3" || { echo "$ME: ungueltige Modell-ID: $3" >&2; exit 4; }
+    valid_model_id "$3" || { echo "$ME: invalid model id: $3" >&2; exit 4; }
     edit '.projects[$p] = ((.projects[$p] // {}) + {model: $m})' --arg p "$2" --arg m "$3" || exit $?
     ;;
   unset)
@@ -82,7 +82,7 @@ case "$cmd" in
     ;;
   star)
     [ $# -eq 2 ] || usage
-    valid_model_id "$2" || { echo "$ME: ungueltige Modell-ID: $2" >&2; exit 4; }
+    valid_model_id "$2" || { echo "$ME: invalid model id: $2" >&2; exit 4; }
     edit '.starred = ((.starred // []) + [$m] | unique)' --arg m "$2" || exit $?
     ;;
   unstar)

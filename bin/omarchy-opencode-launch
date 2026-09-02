@@ -24,18 +24,18 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -d "$dir" ] || { echo "$ME: kein Verzeichnis: $dir" >&2; exit 2; }
+[ -d "$dir" ] || { echo "$ME: not a directory: $dir" >&2; exit 2; }
 
 OPENCODE="${OPENCODE_BIN:-$(command -v opencode 2>/dev/null || true)}"
-[ -n "$OPENCODE" ] && [ -x "$OPENCODE" ] || { echo "$ME: opencode ist nicht installiert" >&2; exit 3; }
+[ -n "$OPENCODE" ] && [ -x "$OPENCODE" ] || { echo "$ME: opencode is not installed" >&2; exit 3; }
 
 # Vor dem Bauen der Zeile pruefen, nicht danach: eine kaputte ID darf nicht
 # in eine eval-Zeile geraten.
 if [ -n "$model" ]; then
-  valid_model_id "$model" || { echo "$ME: ungueltige Modell-ID: $model" >&2; exit 4; }
+  valid_model_id "$model" || { echo "$ME: invalid model id: $model" >&2; exit 4; }
 fi
 if [ -n "$agent" ]; then
-  valid_agent_name "$agent" || { echo "$ME: ungueltiger Agentenname: $agent" >&2; exit 5; }
+  valid_agent_name "$agent" || { echo "$ME: invalid agent name: $agent" >&2; exit 5; }
 fi
 
 # Ruling 33: die App-Id haengt am Slug von app_id_for ab, und der wiederum

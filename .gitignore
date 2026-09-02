@@ -1,3 +1,16 @@
 *.bak
 node_modules/
 test/.mutation-backup/
+
+# Ruling 36: die Superpowers-Arbeitsdateien (Plan und Spezifikation) bleiben
+# auf der Platte und in der Historie, sind aber nicht mehr versioniert. Der
+# Basis-Scanner des Marktplatzes liest Repository-TEXT und leitet daraus
+# Capabilities ab: beide Dateien nennen die Rechteausweitungs- und
+# Paketverwaltungs-Schluesselwoerter woertlich -- ausgerechnet in den
+# Absaetzen, die davor warnen. Der Scanner haette privilege und
+# package-manager daraus abgeleitet. Die Erklaerung selbst nennt sie
+# deshalb hier NICHT: dieser Kommentar ist versionierter Text und waere
+# sonst ein Treffer wie die Dateien, die er ausschliesst.
+# docs/design.md und docs/einreichung.md sind davon nicht betroffen und
+# bleiben versioniert.
+docs/superpowers/

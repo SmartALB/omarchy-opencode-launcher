@@ -26,15 +26,19 @@ Panel {
   // abgesichert.
   readonly property string fontFam: root.bar ? root.bar.fontFamily : Style.fontFamily
 
+  // C10: decodeURIComponent ist Pflicht, nicht Kosmetik. Qt.resolvedUrl
+  // liefert eine URL, und die kodiert Zeichen prozentweise -- ein
+  // Installationsverzeichnis mit einem Leerzeichen kommt als ".../mein%20
+  // plugin/bin" heraus. shellEscape() unten macht diesen Wert SICHER
+  // (nichts davon wird von der Shell interpretiert), aber nicht RICHTIG:
+  // ein Pfad, den es so gar nicht gibt, laesst jeden Skriptaufruf mit
+  // "No such file or directory" scheitern. Der frueher hier stehende
+  // Kommentar behauptete das Gegenteil.
   readonly property string scriptDir:
-    Qt.resolvedUrl(".").toString().replace("file://", "") + "/bin"
+    decodeURIComponent(Qt.resolvedUrl(".").toString().replace("file://", "")) + "/bin"
 
-  // Quality (Fix Runde 1): scriptDir wanderte bisher UNESCAPED in jede
-  // Kommandozeile -- Qt.resolvedUrl kann Zeichen prozent-kodieren, und ein
-  // Installationsverzeichnis mit Leer- oder Sonderzeichen war damit nicht
-  // abgesichert wie jeder andere interpolierte Wert. scriptCmd() haengt den
-  // Skriptnamen an und escaped das Ganze EINMAL, an einer Stelle -- jeder
-  // Aufrufer haengt nur noch geschuetzte Argumente an.
+  // scriptCmd() haengt den Skriptnamen an und escaped das Ganze EINMAL, an
+  // einer Stelle -- jeder Aufrufer haengt nur noch geschuetzte Argumente an.
   function scriptCmd(name) {
     return root.shellEscape(root.scriptDir + "/" + name)
   }
@@ -131,7 +135,7 @@ Panel {
 
   function armConfirm(path) {
     root.confirmArmedPath = path
-    root.confirmHint = "Noch einmal Umschalt+Eingabetaste fuer ein zweites Fenster"
+    root.confirmHint = "Press Shift+Enter again to open a second window"
     confirmTimer.restart()
   }
 
@@ -181,6 +185,29 @@ Panel {
   // beendet ist (bekannte Einschraenkung aus dem Vorgaengerbericht).
   readonly property bool busy: launchProc.running || storeProc.running
 
+  // C3: bis hierher wanderte "data.error" ROH in loadError -- im Panel
+  // stand dann woertlich "state-not-a-file" oder "config-invalid". Dieselbe
+  // Uebersetzungstabelle, die ModelSheet.qml fuer die Modell-Codes schon
+  // hat. Der Config-Pfad wird bei den Config-Fehlern mitgenannt: das ist
+  // die einzige Datei in dieser Liste, die der Benutzer selbst schreibt --
+  // ohne den Pfad weiss er nicht, wo er nachsehen soll.
+  readonly property string configPath: "~/.config/omarchy/opencode-launcher.json"
+  function projectsErrorText(code) {
+    if (code === "opencode-missing") return "opencode is not installed or not executable"
+    if (code === "config-invalid") return "The pinned projects in " + root.configPath
+      + " have the wrong shape: \"projects\" must be a list, and every entry needs a \"path\". "
+      + "README.md has a minimal example."
+    if (code === "config-unreadable") return "The pinned projects in " + root.configPath + " are not valid JSON"
+    if (code === "config-too-large") return "The pinned projects in " + root.configPath + " are too large to read"
+    if (code === "state-not-a-file") return "This plugin's state path is not a regular file (a symlink, perhaps)"
+    if (code === "state-invalid") return "This plugin's state file is damaged"
+    if (code === "state-schema-unknown") return "This plugin's state file was written by a newer version"
+    if (code === "state-too-large") return "This plugin's state file has grown too large"
+    if (code === "cache-not-a-file") return "The model cache path is not a regular file (a symlink, perhaps)"
+    if (code === "cache-too-large") return "The model cache has grown too large"
+    return "Project list not readable"
+  }
+
   Process {
     id: projectsProc
     running: true
@@ -189,12 +216,12 @@ Panel {
       waitForEnd: true
       onStreamFinished: {
         var raw = String(text || "")
-        if (raw.trim() === "") { root.projects = []; root.loadError = "Projektliste nicht lesbar"; return }
+        if (raw.trim() === "") { root.projects = []; root.loadError = root.projectsErrorText(""); return }
         try {
           var data = JSON.parse(raw)
           if (Array.isArray(data)) { root.projects = data; root.loadError = "" }
-          else { root.projects = []; root.loadError = String((data && data.error) || "Projektliste nicht lesbar") }
-        } catch (e) { root.projects = []; root.loadError = "Projektliste nicht lesbar" }
+          else { root.projects = []; root.loadError = root.projectsErrorText(String((data && data.error) || "")) }
+        } catch (e) { root.projects = []; root.loadError = root.projectsErrorText("") }
       }
     }
   }
@@ -248,9 +275,11 @@ Panel {
         // zum naechsten Aktualisieren gelogen, und ein zweiter Klick haette
         // "star" ein zweites Mal statt "unstar" gesendet (siehe der
         // Kommentar bei "storeAction" oben).
+        modelsProc.running = false
         modelsProc.command = root.runnerOut(root.envPrefix + root.scriptCmd("omarchy-opencode-models") + " list --json --refresh")
         modelsProc.running = true
       } else {
+        projectsProc.running = false
         projectsProc.running = true
       }
     }
@@ -265,7 +294,10 @@ Panel {
         if (m !== "") root.launchError = m.split("\n").pop()
       }
     }
-    onExited: projectsProc.running = true
+    onExited: {
+      projectsProc.running = false
+      projectsProc.running = true
+    }
   }
 
   function openProject(entry, newWindow) {
@@ -281,6 +313,7 @@ Panel {
     if (entry.model) c += " --model " + root.shellEscape(entry.model)
     if (newWindow) c += " --new-window"
     root.launchError = ""
+    launchProc.running = false
     launchProc.command = root.runnerErr(c)
     launchProc.running = true
   }
@@ -295,6 +328,7 @@ Panel {
       ? root.scriptCmd("omarchy-opencode-store") + " unset " + root.shellEscape(path)
       : root.scriptCmd("omarchy-opencode-store") + " set " + root.shellEscape(path)
         + " " + root.shellEscape(id)
+    storeProc.running = false
     storeProc.command = root.runnerErr(c)
     storeProc.running = true
   }
@@ -311,14 +345,34 @@ Panel {
     root.storeAction = "star"
     var c = root.scriptCmd("omarchy-opencode-store") + " " + (currentlyStarred ? "unstar" : "star")
       + " " + root.shellEscape(id)
+    storeProc.running = false
     storeProc.command = root.runnerErr(c)
     storeProc.running = true
   }
 
+  // C11: EIN Neustart-Idiom fuer jeden erneuten Lauf mit geaenderten
+  // Argumenten -- erst "running = false", dann (falls noetig) das neue
+  // "command", dann "running = true". Zwei Idiome standen bisher
+  // nebeneinander, und nur dieses ist richtig: "running = true" auf einem
+  // NOCH LAUFENDEN Process tut nichts, ein direkt davor zugewiesenes
+  // "command" waere also stillschweigend verloren. Absichtlich als
+  // ausgeschriebene Zeilen an jeder Stelle statt als Hilfsfunktion: die
+  // Regel test_kein_prozessstart_ausserhalb_der_helfer in test/qml.test.sh
+  // verlangt, dass JEDE Zuweisung an die Kommando-Eigenschaft den
+  // runner-Helfer auf derselben Zeile nennt -- eine zentrale Funktion, die
+  // sie aus einem Parameter belegt, wuerde diese Regel aushebeln, statt sie
+  // zu erfuellen. (Und ja, dieser Kommentar darf die Eigenschaft deshalb
+  // nicht woertlich schreiben: die Regel liest Text, nicht Bedeutung.)
+  //
+  // Nicht betroffen sind die beiden Stellen, die bewusst nur STARTEN, wenn
+  // nichts laeuft (onOpenedChanged, openSheetFor): dort ist "nicht neu
+  // starten" die Absicht, kein Versehen.
   function refreshAll() {
     root.launchError = ""
     root.disarmConfirm()
-    projectsProc.running = false; projectsProc.running = true
+    projectsProc.running = false
+    projectsProc.running = true
+    modelsProc.running = false
     modelsProc.command = root.runnerOut(root.envPrefix + root.scriptCmd("omarchy-opencode-models")
       + " list --json --refresh")
     modelsProc.running = true
@@ -501,7 +555,7 @@ Panel {
               // der Roboter oben passt der Codepunkt in EIN \u-Escape,
               // ohne Ersatzpaar.
               iconText: "\uF021"
-              tooltipText: "Liste aktualisieren"
+              tooltipText: "Refresh the list"
               foreground: root.barForeground
               fontFamily: root.fontFam
               enabled: !projectsProc.running && !modelsProc.running
@@ -540,7 +594,7 @@ Panel {
           Text {
             width: panelColumn.width
             visible: root.listCapped
-            text: "Liste bei 200 Projekten gekappt"
+            text: "List capped at 200 projects"
             color: root.barForeground
             font.family: root.fontFam
             font.pixelSize: Style.font.caption
@@ -553,9 +607,12 @@ Panel {
           Text {
             width: panelColumn.width
             visible: root.loadError === "" && root.projects.length === 0 && !projectsProc.running
-            text: "Noch keine Projekte. Angeheftete Projekte stehen in "
-              + "~/.config/omarchy/opencode-launcher.json, zuletzt verwendete kommen "
-              + "automatisch von opencode dazu."
+            // C7: die Datei zu NENNEN half niemandem, der nicht weiss, was
+            // hineingehoert -- README.md hat jetzt ein Minimalbeispiel, und
+            // diese Zeile verweist darauf.
+            text: "No projects yet. Pinned projects go in " + root.configPath
+              + " (README.md has a minimal example); recently used ones are added "
+              + "automatically from opencode."
             color: root.barForeground
             font.family: root.fontFam
             font.pixelSize: Style.font.caption
@@ -630,7 +687,7 @@ Panel {
                   anchors.centerIn: parent
                   text: (modelData.modelLabel
                           ? modelData.modelLabel + (modelData.modelKnown === false ? " (?)" : "")
-                          : "Std.") + "  \u2304"
+                          : "Default") + "  \u2304"
                   color: root.barForeground
                   font.family: root.fontFam
                   font.pixelSize: Style.font.caption
@@ -667,6 +724,30 @@ Panel {
                 }
               }
             }
+          }
+
+          // C6: Spezifikation 4 sah eine Fusszeile vor ("Enter oeffnen,
+          // m Modell"), und keine gab es -- "m", "r", "*", Esc, die
+          // Pfeiltasten und der Rechtsklick auf eine Zeile waren nirgends
+          // im Programm zu entdecken; die README nannte nur Shift+Enter.
+          // Unter der Liste, nicht darueber: die Liste ist der Inhalt, die
+          // Legende die Randnotiz. Sichtbar nur, solange ueberhaupt Zeilen
+          // da sind -- eine Tastenlegende ohne Zeilen, auf die sie sich
+          // beziehen koennte, waere Zierrat.
+          //
+          // Pfeile und Trennpunkte als \u-Escapes, wie der Roboter und der
+          // Chevron oben: eine Glyphe direkt in der Datei geht beim
+          // Kopieren durch Werkzeuge verloren.
+          Text {
+            width: panelColumn.width
+            visible: root.projects.length > 0
+            text: "\u2191\u2193 move  \u00B7  Enter open  \u00B7  Shift+Enter new window"
+              + "  \u00B7  m or right-click model  \u00B7  r refresh  \u00B7  Esc close"
+            color: root.barForeground
+            font.family: root.fontFam
+            font.pixelSize: Style.font.caption
+            opacity: 0.55
+            wrapMode: Text.WordWrap
           }
         }
       }
