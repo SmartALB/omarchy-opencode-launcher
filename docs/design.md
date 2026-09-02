@@ -31,9 +31,12 @@ everything that reads or writes a file, or starts a process.
   goes to a temporary file in the same directory and is renamed into place,
   so a state file is never read half-written.
 - **`omarchy-opencode-launch`** starts opencode for a chosen project and
-  model, or focuses the window if that project is already open. This is
-  the only script that starts an external process, and the only place the
-  model actually reaches opencode.
+  model. For a project that is already open, it hands its app-id to
+  Omarchy's own `omarchy-launch-or-focus`, which focuses the existing
+  window rather than starting a second process -- the actual focusing is
+  that tool's job, not this plugin's. This is the only script that starts
+  an external process, and the only place the model actually reaches
+  opencode.
 
 `_common.sh` holds what all four share: path handling, ID validation, and
 absolute paths to every external program they call.
@@ -74,29 +77,31 @@ the way.
 
 ## Testing approach
 
-`./test/run.sh` runs 105 checks across the four scripts and the panel,
+`./test/run.sh` runs the full suite across the four scripts and the panel,
 against a sandboxed `PATH`, state directory and cache directory built for
 the test run -- no test touches a real opencode installation or the real
-plugin state.
+plugin state. It prints its own pass/fail tally at the end; that count is
+not repeated here, since it changes with every added test and a
+hard-coded number in prose would just as reliably go stale.
 
-A green suite is not proof on its own. In this project's own history, a
-test asserted that a program's own ID appeared somewhere in a recorded
-command line -- and passed on both the correct code and on two later
-mutations that broke the actual behavior, because the ID also appeared
-elsewhere in that same command line for an unrelated reason. The test was
-checking for *presence*, not for the *position* that mattered; it went on
-passing right through the regression it existed to catch, and only closer
-review caught the gap. That kind of test is worse than no test: it looks
-like coverage on a report while catching nothing.
+A green suite is not proof on its own. This project's own history already
+counts sixteen tests that passed while proving nothing about the behaviour
+they were meant to guard -- checking for the wrong thing, or for something
+that happened to be true regardless of whether the actual protection was
+in place. Each looked like coverage on a report while catching nothing,
+and each was found only by closer review, not by the suite failing.
 
 `./test/mutation.sh` exists to catch that class of failure mechanically
-rather than by inspection. Each of its ten probes removes exactly one
-safeguard from the code -- a validation check, a timeout, a symlink guard
--- and then runs the full suite, expecting at least one test to turn red
-*because of that specific change*. The probe records which test failed and
-with what message, not just that something failed: a passing suite whose
-failure comes from an unrelated cause (a missing tool in a narrow test
-`PATH`, say) would look identical to a real catch without that detail. A
-probe whose safeguard is removed but every test stays green means exactly
-what the earlier example showed: the tests exist, but nothing in them
-would notice if that protection disappeared.
+rather than by review. Each probe removes exactly one safeguard from the
+code -- a validation check, a timeout, a symlink guard -- and then runs
+the full suite, expecting at least one test to turn red *because of that
+specific change*. The probe records which test failed and with what
+message, not just that something failed: a passing suite whose failure
+comes from an unrelated cause (a missing tool in a narrow test `PATH`,
+say) would look identical to a real catch without that detail. A probe
+whose safeguard is removed but every test stays green means exactly what
+the sixteen-tests history above illustrates: the tests exist, but nothing
+in them would notice if that protection disappeared. The runner prints
+how many probes ran and how many of them actually turned a test red, for
+the same reason `./test/run.sh` prints its own tally rather than being
+quoted here.

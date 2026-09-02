@@ -100,10 +100,11 @@ started. Pressing the row starts opencode as `opencode -m provider/model`
 in that project's directory -- the model is a flag on the process, nothing
 is written into opencode's own configuration.
 
-If a project's window is already open, pressing the row focuses that window
-instead of starting a second opencode process. `Shift+Enter` forces a
-second window regardless; with `confirmNewWindow` on, that has to be
-confirmed once before it opens.
+The plugin derives a stable app-id from the project directory and hands
+the launch to Omarchy's own `omarchy-launch-or-focus`, which focuses an
+existing window carrying that app-id instead of starting a second one.
+`Shift+Enter` bypasses that and always starts a new window; with
+`confirmNewWindow` on, that has to be confirmed once before it opens.
 
 ## Tests
 
@@ -111,18 +112,22 @@ confirmed once before it opens.
 ./test/run.sh
 ```
 
-105 checks across the four scripts and the panel, run against a sandboxed
-`PATH`, state directory and cache directory -- no test touches the real
-configuration or a real opencode installation.
+Runs the full suite across the four scripts and the panel and prints its
+own pass/fail tally at the end. Run against a sandboxed `PATH`, state
+directory and cache directory -- no test touches the real configuration or
+a real opencode installation.
 
 ```
 ./test/mutation.sh
 ```
 
-Ten mutation probes. Each one removes a single safeguard from the code and
-checks that at least one test in `./test/run.sh` actually turns red because
-of it -- a green suite proves nothing on its own if nothing in it would
-notice the safeguard's absence.
+Runs the mutation probes and prints how many ran and how many turned at
+least one test red. Each probe removes a single safeguard from the code
+and checks that `./test/run.sh` actually turns red because of it. A green
+suite proves nothing on its own: this project's own history already has
+sixteen tests that stayed green while proving nothing about the behaviour
+they were meant to guard -- the probes exist to catch that mechanically
+instead of by review.
 
 ## License
 

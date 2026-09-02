@@ -32,6 +32,7 @@ everything else stays usable.
 
 **License:** MIT.
 
-**Tests:** 105 checks (`./test/run.sh`) plus ten mutation probes
-(`./test/mutation.sh`) that demonstrate the tests actually fail when a
-safeguard is removed.
+**Tests:** `./test/run.sh` (prints its own pass/fail tally) plus
+`./test/mutation.sh`, a set of mutation probes (also prints its own
+tally) that demonstrate the tests actually fail when a safeguard is
+removed.
