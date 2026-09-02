@@ -72,20 +72,40 @@ if [ -f "$STATE" ]; then
     # und "zu gross" sind verschiedene Tatsachen (dieselbe Begruendung wie
     # bei Ruling 19 fuer Symlinks).
     die_json "state-too-large" 8
-  elif [ "$rc" = 0 ] && printf '%s' "$s" | "$BIN_JQ" -e . >/dev/null 2>&1; then
-    # Ruling 25: gueltiges JSON reicht nicht -- "{"projects":[]}" oder
-    # "{"projects":"x"}" besteht die reine "-e ."-Pruefung anstandslos und
-    # stuerzt danach im abschliessenden jq an "$state.projects[$p]" ab
-    # ("Cannot index array with string"), mit leerem stdout. Form und
-    # schemaVersion daher hier pruefen, bevor $state ueberhaupt in den
-    # letzten jq-Aufruf geht -- derselbe Massstab, den
+  elif [ "$rc" = 0 ]; then
+    # Ruling 25/28: gueltiges JSON reicht nicht. Runde 1 pruefte nur, dass
+    # ".projects" selbst ein Objekt ist -- das liess einen Wert wie
+    # "{"projects":{"/foo":"openai/x"}}" durch, der im abschliessenden jq an
+    # "$state.projects[$p].model" ("Cannot index string with string")
+    # trotzdem abstuerzt. Ruling 28 (a) schliesst diese zweite Form
+    # desselben Fehlers: JEDER Wert unter ".projects" muss ebenfalls ein
+    # Objekt sein, in einem einzigen jq-Aufruf ueber "all", nicht in einer
+    # Bash-Schleife pro Projekt.
+    #
+    # Reihenfolge: erst "ist das ueberhaupt JSON" (sonst state-invalid, 9 --
+    # dieselbe Fehlerform wie eine kaputte config, nicht mehr stillschweigend
+    # der Standard), dann schemaVersion (state-schema-unknown, 7 -- ein
+    # nicht-Objekt an der Wurzel wie "[]" laesst ".schemaVersion" selbst
+    # scheitern, $ver bleibt leer, "!= 1" greift also auch hier), dann die
+    # Form von ".projects" und seiner Werte. Derselbe Massstab, den
     # omarchy-opencode-store an seine eigenen Schreibvorgaenge anlegt.
+    #
+    # null als Wert (z.B. "{"projects":{"/foo":null}}") faellt bewusst
+    # ebenfalls unter state-invalid, nicht unter "kein Modell gemerkt": der
+    # Schreiber (omarchy-opencode-store) erzeugt nie einen null-Wert -- er
+    # entfernt den ganzen Eintrag ueber "unset" --, ein null-Wert waere also
+    # immer eine fremde oder beschaedigte Datei, keine legitime Form.
+    if ! printf '%s' "$s" | "$BIN_JQ" -e . >/dev/null 2>&1; then
+      die_json "state-invalid" 9
+    fi
     ver="$(printf '%s' "$s" | "$BIN_JQ" -r '.schemaVersion // 0' 2>/dev/null)"
     if [ "$ver" != "1" ]; then
       die_json "state-schema-unknown" 7
     fi
-    proj_type="$(printf '%s' "$s" | "$BIN_JQ" -r '(.projects // {}) | type' 2>/dev/null)"
-    if [ "$proj_type" != "object" ]; then
+    shape_ok="$(printf '%s' "$s" | "$BIN_JQ" -r '
+      (.projects // {}) as $p
+      | ($p | type == "object") and ([$p[] | type == "object"] | all)' 2>/dev/null)"
+    if [ "$shape_ok" != "true" ]; then
       die_json "state-invalid" 9
     fi
     state="$s"
@@ -180,7 +200,15 @@ fi
     # nach dem Pipe das neue "."), nicht gegen die Zeile -- der Vergleich
     # traefe dann nie und running bliebe immer false.
     | ($row[1]) as $p
-    | ($state.projects[$p].model // null) as $m
+    # Ruling 28 (b): Gueltigkeitspruefung und defensiver Filter beantworten
+    # verschiedene Fragen. Die Pruefung oben entscheidet, OB ueberhaupt
+    # weitergemacht wird; dieser Ausdruck hier garantiert zusaetzlich, dass
+    # KEINE Form -- heute oder in einer kuenftigen schemaVersion -- diesen
+    # Aufruf mit leerem stdout abstuerzen laesst, selbst wenn die Pruefung
+    # oben je eine Luecke haette. Ohne das "if type == "object"" wuerde
+    # z.B. "$state.projects[$p].model" bei einem String-Wert mit "Cannot
+    # index string with string" abbrechen (siehe Review-Repro).
+    | (($state.projects[$p] // {}) | if type == "object" then (.model // null) else null end) as $m
     | { name: $row[0], path: $p, displayPath: $row[2], appId: $row[3],
         pinned: ($row[4] == "true"), exists: ($row[5] == "true"), capped: $capped,
         running: ($classes | index($row[3]) != null),

@@ -370,4 +370,48 @@ test_sqlite_wird_uebersprungen_wenn_bereits_gekappt() {
   assert_eq "$db_calls" "0"
 }
 
+# Ruling 28 (c): die Invariante, auf die sich das Panel verlaesst, einmal
+# ausgesprochen -- stdout ist IMMER gueltiges JSON -- und tabellengetrieben
+# geprueft, statt fuer jede neu gefundene kaputte Form eine weitere
+# Review-Runde zu brauchen. Eine neue kaputte Form ist ab jetzt eine neue
+# Zeile in "cases", kein neuer Testname. Je Zeile (durch Tabs getrennt):
+# Ziel(state|config), Inhalt, erwarteter .error-Wert, erwarteter Exit-Code.
+test_kaputte_formen_liefern_immer_gueltiges_json_mit_fehler() {
+  setup_common
+  mkdir -p "$SANDBOX/a"
+  state_dir="$XDG_STATE_HOME/omarchy/smartalb-opencode"
+  state_file="$state_dir/projects.json"
+  mkdir -p "$state_dir"
+  local cases=(
+    $'state\t{"schemaVersion":1,"projects":{"/p":"openai/x"}}\tstate-invalid\t9'
+    $'state\t{"schemaVersion":1,"projects":{"/p":[]}}\tstate-invalid\t9'
+    $'state\t{"schemaVersion":1,"projects":{"/p":42}}\tstate-invalid\t9'
+    $'state\t{"schemaVersion":1,"projects":{"/p":null}}\tstate-invalid\t9'
+    $'state\t[]\tstate-schema-unknown\t7'
+    $'state\t{"projects":{}}\tstate-schema-unknown\t7'
+    $'state\t{ kein json\tstate-invalid\t9'
+    $'config\t{ kein json\tconfig-unreadable\t9'
+  )
+  local case_line target content expected_error expected_exit out rc
+  for case_line in "${cases[@]}"; do
+    IFS=$'\t' read -r target content expected_error expected_exit <<< "$case_line"
+    # Jeden Fall aus einer sauberen Grundlage heraus starten, statt
+    # setup_sandbox je Iteration neu aufzurufen: das wuerde SANDBOX und die
+    # EXIT-Falle mehrfach ueberschreiben und fruehere Sandbox-Verzeichnisse
+    # als Leichen zuruecklassen.
+    rm -f "$state_file"
+    write_config "{\"projects\":[{\"name\":\"A\",\"path\":\"$SANDBOX/a\"}]}"
+    case "$target" in
+      state) printf '%s' "$content" > "$state_file" ;;
+      config) write_config "$content" ;;
+    esac
+    rc=0
+    out="$("$PROJ" list --json)" || rc=$?
+    printf '%s' "$out" | jq -e . >/dev/null 2>&1 \
+      || fail "Zeile [$target -> $expected_error]: stdout ist kein gueltiges JSON: $out"
+    assert_eq "$(printf '%s' "$out" | jq -r '.error // "FEHLT"')" "$expected_error"
+    assert_status "$rc" "$expected_exit"
+  done
+}
+
 run_tests
