@@ -34,7 +34,6 @@ Item {
 
   property var models: []
   property bool stale: false
-  property string source: ""
   property string errorCode: ""
   property bool busy: false
   property string filter: ""
@@ -67,6 +66,7 @@ Item {
     if (sheet.errorCode === "opencode-missing") return "opencode ist nicht installiert oder nicht ausfuehrbar"
     if (sheet.errorCode === "models-unavailable") return "opencode war nicht erreichbar, kein Zwischenspeicher vorhanden"
     if (sheet.errorCode === "models-too-large") return "Die Modell-Liste war zu gross, kein brauchbarer Zwischenspeicher vorhanden"
+    if (sheet.errorCode === "cache-too-large") return "Der Zwischenspeicher selbst ist zu gross geworden"
     if (sheet.errorCode === "cache-not-a-file") return "Der Zwischenspeicher-Pfad ist kein normaler Ordnereintrag (evtl. ein Symlink)"
     if (sheet.errorCode !== "") return "Modell-Liste nicht lesbar"
     if (sheet.stale) return "Liste aus dem Zwischenspeicher -- opencode war nicht erreichbar"

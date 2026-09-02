@@ -138,4 +138,31 @@ test_kein_schreibpfad_nach_config_opencode() {
   assert_eq "$bad" ""
 }
 
+test_stern_umschalten_erzwingt_frischen_katalog() {
+  # Ruling 45 (Fix Runde 2, G2): "store star|unstar" schreibt zuverlaessig,
+  # aber "starred" wird von bin/omarchy-opencode-models nur beim
+  # tatsaechlichen Abruf aus opencode neu in den Zwischenspeicher
+  # geschrieben (siehe emit() dort) -- ein Wiedereinlesen OHNE "--refresh"
+  # liefert bei frischem Zwischenspeicher denselben, jetzt veralteten
+  # Stern-Stand zurueck. toggleStar() liest "starred" aus genau dieser
+  # Liste, um zwischen "star" und "unstar" zu entscheiden: ohne "--refresh"
+  # waere "unstar" bis zum naechsten manuellen Aktualisieren unerreichbar,
+  # und ein zweiter Klick haette "star" ein zweites Mal gesendet.
+  #
+  # Nicht ueber Verhalten pruefbar -- kein Bash-Test kann den gerenderten
+  # Stern lesen --, wohl aber ueber den Kommandostring selbst, dieselbe
+  # Methode wie bei der Prozess-Substitution und den absoluten
+  # Interpreter-Pfaden.
+  # Kommentarzeilen ausgeschnitten, bevor geprueft wird: ein Kommentar, der
+  # "--refresh" nur ERWAEHNT (wie der direkt daneben stehende, der genau
+  # diese Regel erklaert), darf die Regel nicht faelschlich gruen halten --
+  # gemessen an einer echten Probe (siehe Fix-Runde-2-Report): das
+  # "--refresh" aus der Kommandozeile entfernt, waehrend der erklaerende
+  # Kommentar (der das Wort selbst nennt) stehen blieb, hielt die
+  # ungefilterte Fassung dieser Regel faelschlich gruen.
+  out="$(sed -n '/root.storeAction === "star"/,/^      } else {/p' "$ROOT/Panel.qml" \
+          | grep -v '^[[:space:]]*//')"
+  assert_contains "$out" "--refresh"
+}
+
 run_tests

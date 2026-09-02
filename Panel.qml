@@ -82,21 +82,31 @@ Panel {
   }
 
   property var projects: []
+  // Fix Runde 2: ohne diese Klemme zeigt "cursor" nach einem Aktualisieren
+  // mit weniger Zeilen als vorher ins Leere -- die Markierung verschwindet,
+  // und Enter traefe "undefined" (der bestehende "!entry"-Schutz in
+  // openProject() faengt das zwar ab, aber die Markierung soll erst gar
+  // nicht verschwinden).
+  onProjectsChanged: root.cursor = Math.max(0, Math.min(root.cursor, root.projects.length - 1))
   property var models: []
   property string loadError: ""
   property string launchError: ""
   property bool modelsStale: false
-  property string modelsSource: ""
   property string modelsError: ""
   property string sheetPath: ""
   property int cursor: 0
   // Wer den laufenden storeProc-Aufruf ausgeloest hat: das Setzen/Loeschen
   // eines Modells (aktualisiert danach die Projektliste, weil deren
   // "modelLabel" sich geaendert hat) oder das Umschalten eines Sterns
-  // (aktualisiert danach die Modell-Liste, weil deren Sortierung und
-  // "starred"-Markierung sich geaendert hat). Ein Feld statt zwei
-  // getrennter Prozesse: beides sind kurze, seltene Schreibzugriffe auf
-  // denselben Store, ein zweiter Process-Typ wuerde nur Component.
+  // (fragt danach die Modell-Liste MIT "--refresh" neu ab). Das "--refresh"
+  // ist Pflicht, keine Kosmetik (G2, Fix Runde 2): "starred" wird nur beim
+  // tatsaechlichen Abruf von opencode neu in bin/omarchy-opencode-models'
+  // Zwischenspeicher geschrieben -- ein Wiedereinlesen OHNE "--refresh"
+  // liefert bei einem noch frischen Zwischenspeicher weiterhin den alten
+  // Stern-Stand zurueck, und toggleStar() liest "starred" aus genau dieser
+  // Liste, um zwischen "star" und "unstar" zu entscheiden. Ein Feld statt
+  // zwei getrennter Prozesse: beides sind kurze, seltene Schreibzugriffe
+  // auf denselben Store, ein zweiter Process-Typ wuerde nur Component.
   // onDestruction um einen weiteren Eintrag verlaengern, ohne dass irgendwo
   // zwei solche Aufrufe je gleichzeitig liefen.
   property string storeAction: ""
@@ -137,11 +147,16 @@ Panel {
   //
   // W2 (Fix Runde 1): "Number(...) || 24" verwandelte ein bewusst
   // konfiguriertes 0 in 24 -- 0 ist im Skript aber bedeutsam ("den
-  // Zwischenspeicher nie als frisch behandeln"). numOrDefault() ersetzt nur
-  // NICHT-Zahlen (NaN, "", ein fehlender Wert) durch den Standard; eine
-  // echte 0 bleibt 0. recentCount hatte denselben Fehler nie beobachtbar,
-  // weil sein Standard selbst 0 ist -- trotzdem derselbe Helfer, damit die
-  // beiden Werte nicht wieder auseinanderlaufen.
+  // Zwischenspeicher nie als frisch behandeln"). numOrDefault() ersetzt nur,
+  // was zu NaN wird (ein fehlender Wert, ein nicht-numerischer Text), durch
+  // den Standard; eine echte 0 bleibt 0. Richtigstellung (Fix Runde 2):
+  // "Number('')" ist 0, nicht NaN -- eine leere Zeichenkette faellt also
+  // NICHT auf den Standard zurueck, sondern wird zu 0 (harmlos, weil 0
+  // ohnehin im erlaubten Bereich liegt, aber die vorherige Formulierung
+  // behauptete faelschlich das Gegenteil). recentCount hatte den
+  // urspruenglichen Fehler ("|| 24") nie beobachtbar, weil sein Standard
+  // selbst 0 ist -- trotzdem derselbe Helfer, damit die beiden Werte nicht
+  // wieder auseinanderlaufen.
   function numOrDefault(raw, fallback) {
     var n = Number(raw)
     return isFinite(n) ? n : fallback
@@ -184,13 +199,17 @@ Panel {
     }
   }
 
-  // W1 (Fix Runde 1): "error" und "source" wurden bisher nie gelesen. Mit
-  // source: "none" zeigte der Picker eine leere Liste PLUS die Meldung
-  // "Liste aus dem Zwischenspeicher" -- eine Behauptung ueber einen
-  // Zwischenspeicher, der in diesem Fall gar nicht existiert.
-  // bin/omarchy-opencode-models setzt "error" immer zusammen mit
-  // "models: []"; ModelSheet.statusText uebersetzt den Code in eine
-  // Meldung, die den tatsaechlichen Grund nennt.
+  // W1 (Fix Runde 1): "error" wurde bisher nie gelesen. Mit source: "none"
+  // zeigte der Picker eine leere Liste PLUS die Meldung "Liste aus dem
+  // Zwischenspeicher" -- eine Behauptung ueber einen Zwischenspeicher, der
+  // in diesem Fall gar nicht existiert. bin/omarchy-opencode-models setzt
+  // "error" immer zusammen mit "models: []"; ModelSheet.statusText
+  // uebersetzt den Code in eine Meldung, die den tatsaechlichen Grund
+  // nennt. "source" selbst wurde in Runde 1 zusaetzlich durchgereicht,
+  // aber nie gelesen: "error" (welcher Fehler) und "stale" (frisch oder
+  // aus dem Zwischenspeicher) decken zusammen bereits jeden Fall ab, den
+  // "source" haette unterscheiden koennen -- in Runde 2 deshalb wieder
+  // entfernt statt eine zweite, ungenutzte Wahrheitsquelle zu pflegen.
   Process {
     id: modelsProc
     command: root.runnerOut(root.envPrefix + root.scriptCmd("omarchy-opencode-models") + " list --json")
@@ -202,12 +221,10 @@ Panel {
           var d = JSON.parse(raw === "" ? "{}" : raw)
           root.models = Array.isArray(d.models) ? d.models : []
           root.modelsStale = d.stale === true
-          root.modelsSource = String(d.source || "")
           root.modelsError = String(d.error || "")
         } catch (e) {
           root.models = []
           root.modelsStale = true
-          root.modelsSource = ""
           root.modelsError = "panel-parse-error"
         }
       }
@@ -225,7 +242,13 @@ Panel {
     }
     onExited: {
       if (root.storeAction === "star") {
-        modelsProc.command = root.runnerOut(root.envPrefix + root.scriptCmd("omarchy-opencode-models") + " list --json")
+        // G2 (Fix Runde 2): OHNE "--refresh" liest dieser Aufruf bei einem
+        // noch frischen Zwischenspeicher denselben "starred"-Stand zurueck,
+        // den der Klick gerade aendern sollte -- der Stern haette dann bis
+        // zum naechsten Aktualisieren gelogen, und ein zweiter Klick haette
+        // "star" ein zweites Mal statt "unstar" gesendet (siehe der
+        // Kommentar bei "storeAction" oben).
+        modelsProc.command = root.runnerOut(root.envPrefix + root.scriptCmd("omarchy-opencode-models") + " list --json --refresh")
         modelsProc.running = true
       } else {
         projectsProc.running = true
@@ -246,7 +269,14 @@ Panel {
   }
 
   function openProject(entry, newWindow) {
-    if (!entry || entry.exists === false || launchProc.running) return
+    // Fix Runde 2: "root.busy" statt nur "launchProc.running" -- die
+    // Tastatur (Enter/Umschalt+Enter) war bisher waehrend eines laufenden
+    // Store-Schreibzugriffs (Modell setzen, Stern umschalten) NICHT
+    // gesperrt, obwohl die Maus es schon war (rowMouse/chipMouse binden
+    // "enabled" bereits an "!root.busy"). Ein schneller Enter waehrend
+    // dieses Fensters haette mit dem VOR dem Schreiben gueltigen Modell
+    // gestartet.
+    if (!entry || entry.exists === false || root.busy) return
     var c = root.scriptCmd("omarchy-opencode-launch") + " " + root.shellEscape(entry.path)
     if (entry.model) c += " --model " + root.shellEscape(entry.model)
     if (newWindow) c += " --new-window"
@@ -256,7 +286,10 @@ Panel {
   }
 
   function setModel(path, id) {
-    if (storeProc.running) return
+    // Fix Runde 2: ein leerer Pfad ist nie ein gueltiges Ziel -- ohne diese
+    // Wache schriebe ein (heute nicht vorkommender, aber nicht
+    // ausgeschlossener) leerer sheetPath in ".projects['']".
+    if (!path || storeProc.running) return
     root.storeAction = "model"
     var c = id === ""
       ? root.scriptCmd("omarchy-opencode-store") + " unset " + root.shellEscape(path)
@@ -644,7 +677,6 @@ Panel {
       anchors.fill: parent
       models: root.models
       stale: root.modelsStale
-      source: root.modelsSource
       errorCode: root.modelsError
       busy: storeProc.running
       fg: root.barForeground
