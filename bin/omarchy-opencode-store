@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Einziger Schreiber des Zustands von smartalb.opencode.
+# Schreibt atomar: neuer Inhalt in eine Temporaerdatei IM ZIELVERZEICHNIS,
+# dann mv. Ein Teilzustand darf nie auf der Platte stehen, und ein mv ueber
+# Dateisystemgrenzen waere kein Rename, sondern ein Kopieren.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/_common.sh"
+
+ME="$(basename "$0")"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/smartalb-opencode"
+STATE="$STATE_DIR/projects.json"
+EMPTY='{"schemaVersion":1,"projects":{},"starred":[]}'
+
+usage() {
+  echo "Usage: $ME get|unset <pfad> | set <pfad> <modell> | star|unstar <modell> | stars" >&2
+  exit 1
+}
+
+# Gibt den aktuellen Zustand auf stdout. Legt nichts an.
+load() {
+  [ -e "$STATE" ] || { printf '%s' "$EMPTY"; return 0; }
+  # Kein Symlink: wer ihn setzen kann, bestimmt sonst das Ziel des Schreibens.
+  [ ! -L "$STATE" ] || { echo "$ME: $STATE ist ein Symlink" >&2; return 6; }
+  [ -f "$STATE" ] || { echo "$ME: $STATE ist keine einfache Datei" >&2; return 6; }
+  local data rc
+  data="$(read_capped "$STATE" "$MAX_FILE")" || { rc=$?
+    [ "$rc" = 8 ] && echo "$ME: $STATE ist groesser als $MAX_FILE Bytes" >&2
+    return "$rc"; }
+  local ver
+  ver="$(printf '%s' "$data" | "$BIN_JQ" -r '.schemaVersion // 0' 2>/dev/null)" \
+    || { echo "$ME: $STATE ist kein gueltiges JSON" >&2; return 9; }
+  [ "$ver" = "1" ] || { echo "$ME: unbekannte schemaVersion $ver" >&2; return 7; }
+  printf '%s' "$data"
+}
+
+# Nimmt den neuen Inhalt auf stdin und veroeffentlicht ihn atomar.
+publish() {
+  local tmp
+  mkdir -p "$STATE_DIR" || return 1
+  [ ! -L "$STATE" ] || { echo "$ME: $STATE ist ein Symlink" >&2; return 6; }
+  # ".tmp." im Namen, nicht nur eine Punkt-Praefix-Konvention: Task 2's
+  # eigener Test sucht Leichen mit "find -name '*.tmp*'" -- ein Name ohne
+  # dieses Teilwort wuerde einen liegen gebliebenen Rest unsichtbar machen
+  # und den Test aus dem falschen Grund gruen halten.
+  tmp="$("$BIN_MKTEMP" "$STATE_DIR/.projects.json.tmp.XXXXXX")" || return 1
+  if ! cat > "$tmp"; then rm -f "$tmp"; return 1; fi
+  # Leerer Inhalt heisst: jq ist gescheitert. Dann bleibt die alte Datei.
+  if [ ! -s "$tmp" ]; then rm -f "$tmp"; return 1; fi
+  chmod 600 "$tmp"
+  "$BIN_MV" -f "$tmp" "$STATE" || { rm -f "$tmp"; return 1; }
+}
+
+edit() {  # edit <jq-programm> [--arg …]
+  local prog="$1"; shift
+  local cur out rc
+  cur="$(load)" || return $?
+  out="$(printf '%s' "$cur" | "$BIN_JQ" -c "$@" "$prog")" || return 1
+  printf '%s' "$out" | publish
+}
+
+cmd="${1:-}"; [ -n "$cmd" ] || usage
+case "$cmd" in
+  get)
+    [ $# -eq 2 ] || usage
+    cur="$(load)" || exit $?
+    printf '%s' "$cur" | "$BIN_JQ" -r --arg p "$2" '.projects[$p].model // ""'
+    ;;
+  set)
+    [ $# -eq 3 ] || usage
+    valid_model_id "$3" || { echo "$ME: ungueltige Modell-ID: $3" >&2; exit 4; }
+    edit '.projects[$p] = ((.projects[$p] // {}) + {model: $m})' --arg p "$2" --arg m "$3" || exit $?
+    ;;
+  unset)
+    [ $# -eq 2 ] || usage
+    edit 'del(.projects[$p])' --arg p "$2" || exit $?
+    ;;
+  star)
+    [ $# -eq 2 ] || usage
+    valid_model_id "$2" || { echo "$ME: ungueltige Modell-ID: $2" >&2; exit 4; }
+    edit '.starred = ((.starred // []) + [$m] | unique)' --arg m "$2" || exit $?
+    ;;
+  unstar)
+    [ $# -eq 2 ] || usage
+    edit '.starred = ((.starred // []) - [$m])' --arg m "$2" || exit $?
+    ;;
+  stars)
+    [ $# -eq 1 ] || usage
+    cur="$(load)" || exit $?
+    printf '%s' "$cur" | "$BIN_JQ" -r '(.starred // [])[]'
+    ;;
+  *) usage ;;
+esac
