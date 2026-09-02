@@ -64,22 +64,50 @@ not_a_file "$CACHE" && die_json "cache-not-a-file" 6
 
 state='{"projects":{}}'
 if [ -f "$STATE" ]; then
-  s="$(read_capped "$STATE" "$MAX_FILE")" && printf '%s' "$s" | "$BIN_JQ" -e . >/dev/null 2>&1 \
-    && state="$s"
+  s="$(read_capped "$STATE" "$MAX_FILE")"; rc=$?
+  if [ "$rc" = 8 ]; then
+    # Ruling 26: eine zu grosse Zustandsdatei sieht sonst genauso aus wie
+    # "kein Projekt hat je ein Modell gemerkt" -- das "&&" nach read_capped
+    # scheitert einfach lautlos und der Standard bleibt stehen. "Abwesend"
+    # und "zu gross" sind verschiedene Tatsachen (dieselbe Begruendung wie
+    # bei Ruling 19 fuer Symlinks).
+    die_json "state-too-large" 8
+  elif [ "$rc" = 0 ] && printf '%s' "$s" | "$BIN_JQ" -e . >/dev/null 2>&1; then
+    # Ruling 25: gueltiges JSON reicht nicht -- "{"projects":[]}" oder
+    # "{"projects":"x"}" besteht die reine "-e ."-Pruefung anstandslos und
+    # stuerzt danach im abschliessenden jq an "$state.projects[$p]" ab
+    # ("Cannot index array with string"), mit leerem stdout. Form und
+    # schemaVersion daher hier pruefen, bevor $state ueberhaupt in den
+    # letzten jq-Aufruf geht -- derselbe Massstab, den
+    # omarchy-opencode-store an seine eigenen Schreibvorgaenge anlegt.
+    ver="$(printf '%s' "$s" | "$BIN_JQ" -r '.schemaVersion // 0' 2>/dev/null)"
+    if [ "$ver" != "1" ]; then
+      die_json "state-schema-unknown" 7
+    fi
+    proj_type="$(printf '%s' "$s" | "$BIN_JQ" -r '(.projects // {}) | type' 2>/dev/null)"
+    if [ "$proj_type" != "object" ]; then
+      die_json "state-invalid" 9
+    fi
+    state="$s"
+  fi
 fi
 
 known='[]'
 if [ -f "$CACHE" ]; then
-  # "-ce" statt blossem "-c || echo '[]'": jq liest bei leerem stdin
-  # (z.B. eine 0-Byte-Cache-Datei) NULL Dokumente ein, wendet den Filter
-  # nie an, gibt nichts aus und beendet sich trotzdem mit Erfolg -- das
-  # "|| echo '[]'"-Netz greift dann nicht, "known" bliebe ein leerer
-  # String, und der abschliessende --argjson-Aufruf stuerzte mit "invalid
-  # JSON text" ab. "-e" macht daraus verlaesslich einen Fehlschlag (Exit 4,
-  # "kein Ergebnis"), den die Kette hier auffaengt.
-  c="$(read_capped "$CACHE" "$MAX_FILE")" \
-    && k="$(printf '%s' "$c" | "$BIN_JQ" -ce '[(.models // [])[].id]' 2>/dev/null)" \
-    && known="$k"
+  c="$(read_capped "$CACHE" "$MAX_FILE")"; rc=$?
+  if [ "$rc" = 8 ]; then
+    # Ruling 26, spiegelbildlich zum Zustand oben.
+    die_json "cache-too-large" 8
+  elif [ "$rc" = 0 ]; then
+    # "-ce" statt blossem "-c || echo '[]'": jq liest bei leerem stdin
+    # (z.B. eine 0-Byte-Cache-Datei) NULL Dokumente ein, wendet den Filter
+    # nie an, gibt nichts aus und beendet sich trotzdem mit Erfolg -- das
+    # "|| echo '[]'"-Netz greift dann nicht, "known" bliebe ein leerer
+    # String, und der abschliessende --argjson-Aufruf stuerzte mit "invalid
+    # JSON text" ab. "-e" macht daraus verlaesslich einen Fehlschlag (Exit 4,
+    # "kein Ergebnis"), den die Kette hier auffaengt.
+    k="$(printf '%s' "$c" | "$BIN_JQ" -ce '[(.models // [])[].id]' 2>/dev/null)" && known="$k"
+  fi
 fi
 
 # --- Pfade sammeln: gepinnt, dann Recents, gekappt VOR allem Weiteren --------
@@ -100,7 +128,12 @@ while IFS=$'\t' read -r name rawpath; do
   add "$p" "$name" true || break
 done <<< "$pinned_tsv"
 
-if [ "$RECENTS" -gt 0 ] && [ -f "$DB" ] && command -v "$BIN_SQLITE" >/dev/null 2>&1; then
+# "${#PATHS[@]}" -lt "$MAX_PROJECTS": ist die Kappung schon durch die
+# gepinnten Projekte allein erreicht, waere jede Zeile aus der DB ohnehin
+# verworfen -- dann den sqlite3-Unterprozess erst gar nicht anstossen. Genau
+# der Sinn der Kappung: keine Arbeit fuer eine Liste, die niemand angefordert
+# hat.
+if [ "${#PATHS[@]}" -lt "$MAX_PROJECTS" ] && [ "$RECENTS" -gt 0 ] && [ -f "$DB" ] && command -v "$BIN_SQLITE" >/dev/null 2>&1; then
   added=0
   while IFS= read -r rpath; do
     [ -n "$rpath" ] || continue

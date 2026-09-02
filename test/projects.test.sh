@@ -261,4 +261,113 @@ test_leere_cache_datei_stuerzt_das_jq_nicht_ab() {
   assert_eq "$(printf '%s' "$out" | jq -r '.[0].modelKnown')" "true"
 }
 
+# Ruling 25 (Review Runde 2): gueltiges JSON reicht am Zustandspfad nicht --
+# "{"projects":[]}" oder eine fremde schemaVersion bestehen die reine
+# "-e ."-Pruefung, stuerzen aber im abschliessenden jq ab ("Cannot index
+# array with string"), mit leerem stdout. Form und Version muessen vorher
+# geprueft werden, mit eigenen Fehlercodes wie beim Schreiber selbst.
+test_zustand_mit_projects_als_array_meldet_state_invalid() {
+  setup_common
+  mkdir -p "$SANDBOX/a"
+  write_config "{\"projects\":[{\"name\":\"A\",\"path\":\"$SANDBOX/a\"}]}"
+  mkdir -p "$XDG_STATE_HOME/omarchy/smartalb-opencode"
+  printf '{"schemaVersion":1,"projects":[]}' > "$XDG_STATE_HOME/omarchy/smartalb-opencode/projects.json"
+  rc=0
+  out="$("$PROJ" list --json)" || rc=$?
+  assert_eq "$(printf '%s' "$out" | jq -r '.error')" "state-invalid"
+  assert_status "$rc" 9
+}
+
+test_zustand_mit_unbekannter_schemaversion_meldet_sich() {
+  setup_common
+  mkdir -p "$SANDBOX/a"
+  write_config "{\"projects\":[{\"name\":\"A\",\"path\":\"$SANDBOX/a\"}]}"
+  mkdir -p "$XDG_STATE_HOME/omarchy/smartalb-opencode"
+  printf '{"schemaVersion":2,"projects":{}}' > "$XDG_STATE_HOME/omarchy/smartalb-opencode/projects.json"
+  rc=0
+  out="$("$PROJ" list --json)" || rc=$?
+  assert_eq "$(printf '%s' "$out" | jq -r '.error')" "state-schema-unknown"
+  assert_status "$rc" 7
+}
+
+# Ruling 26: "zu gross" darf nicht wie "nichts gemerkt" aussehen -- weder
+# fuer die Zustandsdatei noch fuer den Modell-Cache.
+test_zu_grosse_zustandsdatei_wird_gemeldet() {
+  setup_common
+  mkdir -p "$SANDBOX/a"
+  write_config "{\"projects\":[{\"name\":\"A\",\"path\":\"$SANDBOX/a\"}]}"
+  mkdir -p "$XDG_STATE_HOME/omarchy/smartalb-opencode"
+  head -c 1048577 /dev/zero | tr '\0' 'a' > "$XDG_STATE_HOME/omarchy/smartalb-opencode/projects.json"
+  rc=0
+  out="$("$PROJ" list --json)" || rc=$?
+  assert_eq "$(printf '%s' "$out" | jq -r '.error')" "state-too-large"
+  assert_status "$rc" 8
+}
+
+test_zu_grosse_cache_datei_wird_gemeldet() {
+  setup_common
+  mkdir -p "$SANDBOX/a"
+  write_config "{\"projects\":[{\"name\":\"A\",\"path\":\"$SANDBOX/a\"}]}"
+  mkdir -p "$XDG_CACHE_HOME/omarchy/smartalb.opencode"
+  head -c 1048577 /dev/zero | tr '\0' 'a' > "$XDG_CACHE_HOME/omarchy/smartalb.opencode/models.json"
+  rc=0
+  out="$("$PROJ" list --json)" || rc=$?
+  assert_eq "$(printf '%s' "$out" | jq -r '.error')" "cache-too-large"
+  assert_status "$rc" 8
+}
+
+# Ruling 27: der Reviewer zeigte, dass "running: ($classes | length) > 0"
+# (irgendein Fenster offen => JEDE Zeile "laeuft") jeden bisherigen Test
+# bestehen wuerde. Zwei Tests, die genau das ausschliessen.
+test_running_bleibt_false_bei_fremder_app_id() {
+  setup_common
+  mkdir -p "$SANDBOX/a"
+  write_config "{\"projects\":[{\"name\":\"A\",\"path\":\"$SANDBOX/a\"}]}"
+  make_stub hyprctl 'printf "%s" "[{\"class\":\"org.omarchy.opencode.fremd-0000\"}]"'
+  export HYPRCTL_BIN="$SANDBOX/stub/hyprctl"
+  out="$("$PROJ" list --json)"
+  assert_eq "$(printf '%s' "$out" | jq -r '.[0].running')" "false"
+}
+
+test_running_trifft_nur_die_passende_zeile_unter_mehreren() {
+  setup_common
+  mkdir -p "$SANDBOX/a" "$SANDBOX/b" "$SANDBOX/c"
+  write_config "{\"projects\":[{\"name\":\"A\",\"path\":\"$SANDBOX/a\"},{\"name\":\"B\",\"path\":\"$SANDBOX/b\"},{\"name\":\"C\",\"path\":\"$SANDBOX/c\"}]}"
+  . "$DIR/../bin/_common.sh"
+  idB="$(app_id_for "$SANDBOX/b")"
+  make_stub hyprctl "printf '%s' '[{\"class\":\"$idB\"}]'"
+  export HYPRCTL_BIN="$SANDBOX/stub/hyprctl"
+  out="$("$PROJ" list --json)"
+  assert_eq "$(printf '%s' "$out" | jq -r '.[0].running')" "false"
+  assert_eq "$(printf '%s' "$out" | jq -r '.[1].running')" "true"
+  assert_eq "$(printf '%s' "$out" | jq -r '.[2].running')" "false"
+}
+
+# Minor: bei bereits erreichter Kappung durch gepinnte Projekte allein darf
+# der sqlite3-Unterprozess gar nicht erst gestartet werden -- eine 200-fach
+# gepinnte Liste braucht keine Recents mehr, und "keiner angefordert" heisst
+# hier "keiner gestartet", nicht nur "keiner uebernommen".
+test_sqlite_wird_uebersprungen_wenn_bereits_gekappt() {
+  setup_common
+  {
+    printf '{"projects":['
+    for i in $(seq 1 200); do
+      [ "$i" -gt 1 ] && printf ','
+      printf '{"name":"P%s","path":"%s/p%s"}' "$i" "$SANDBOX" "$i"
+    done
+    printf ']}'
+  } > "$HOME/.config/omarchy/opencode-launcher.json"
+  export OPENCODE_DB="$SANDBOX/oc.db"
+  sqlite3 "$OPENCODE_DB" \
+    "CREATE TABLE session(directory TEXT, time_updated INTEGER);
+     INSERT INTO session VALUES('$SANDBOX/extra', 999);"
+  make_stub timeout 'exit 0'
+  export TIMEOUT_BIN="$SANDBOX/stub/timeout"
+  out="$("$PROJ" list --json)"
+  assert_eq "$(printf '%s' "$out" | jq -r 'length')" "200"
+  # Nur die hyprctl-Zeile darf im Log stehen -- keine, die den DB-Pfad nennt.
+  db_calls="$(stub_log timeout | grep -c -- "$OPENCODE_DB" || true)"
+  assert_eq "$db_calls" "0"
+}
+
 run_tests
