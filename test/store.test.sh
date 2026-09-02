@@ -21,7 +21,13 @@ test_get_ohne_eintrag_ist_leer_und_erfolgreich() {
 }
 
 test_set_lehnt_kaputte_modell_id_ab_ohne_zu_schreiben() {
-  "$STORE" set /p/eins 'kaputt' >/dev/null 2>&1; assert_status "$?" 4
+  # Ruling 15, Nachbeben: "cmd; assert_status \"\$?\" N" (N != 0) ist unter
+  # echtem set -e nicht sicher -- ein fehlschlagender Befehl ohne if/&&/||/!
+  # bricht sofort ab, bevor assert_status je laeuft. Solange run_tests
+  # dieses set -e per if-Bedingung ausser Kraft setzte, fiel das nie auf;
+  # seit dessen Fix wirkt set -e wieder echt. Fix: "cmd || rc=\$?".
+  rc=0; "$STORE" set /p/eins 'kaputt' >/dev/null 2>&1 || rc=$?
+  assert_status "$rc" 4
   [ ! -f "$(statefile)" ] || fail "Zustandsdatei wurde trotz Ablehnung angelegt"
 }
 
@@ -77,8 +83,12 @@ fi
 STUB
   chmod +x "$SANDBOX/stub/jq"
 
-  JQ_BIN="$SANDBOX/stub/jq" "$STORE" set /p/eins openai/b >/dev/null 2>&1
-  assert_ne "$?" "0"
+  # Ruling 15, Nachbeben: die erwartet fehlschlagende Anweisung darf nicht
+  # blank dastehen (siehe Kommentar bei test_set_lehnt_kaputte_modell_id_ab
+  # weiter oben) -- "|| rc=\$?" faengt sie ein, statt set -e ausloesen zu
+  # lassen.
+  rc=0; JQ_BIN="$SANDBOX/stub/jq" "$STORE" set /p/eins openai/b >/dev/null 2>&1 || rc=$?
+  assert_ne "$rc" "0"
   assert_eq "$(cat "$(statefile)")" "$before"
   d="$(dirname "$(statefile)")"
   assert_eq "$(find "$d" -name '*.tmp*' | wc -l | tr -d ' ')" "0"
@@ -106,8 +116,12 @@ if [ "\$n" -eq 1 ]; then exec /usr/bin/jq "\$@"; fi
 STUB
   chmod +x "$SANDBOX/stub/jq"
 
-  JQ_BIN="$SANDBOX/stub/jq" "$STORE" set /p/eins openai/b >/dev/null 2>&1
-  assert_ne "$?" "0"
+  # Ruling 15, Nachbeben: die erwartet fehlschlagende Anweisung darf nicht
+  # blank dastehen (siehe Kommentar bei test_set_lehnt_kaputte_modell_id_ab
+  # weiter oben) -- "|| rc=\$?" faengt sie ein, statt set -e ausloesen zu
+  # lassen.
+  rc=0; JQ_BIN="$SANDBOX/stub/jq" "$STORE" set /p/eins openai/b >/dev/null 2>&1 || rc=$?
+  assert_ne "$rc" "0"
   assert_eq "$(cat "$(statefile)")" "$before"
   d="$(dirname "$(statefile)")"
   assert_eq "$(find "$d" -name '*.tmp*' | wc -l | tr -d ' ')" "0"
@@ -121,8 +135,8 @@ test_set_mv_schlaegt_fehl_alte_datei_bleibt_ohne_rest() {
   # der schreibende cat laufen echt, nur der abschliessende Rename schlaegt
   # fehl. Ueber MV_BIN, nicht ueber den PATH -- das Skript ruft mv absolut auf.
   make_stub mv 'exit 1'
-  MV_BIN="$SANDBOX/stub/mv" "$STORE" set /p/eins openai/b >/dev/null 2>&1
-  assert_ne "$?" "0"
+  rc=0; MV_BIN="$SANDBOX/stub/mv" "$STORE" set /p/eins openai/b >/dev/null 2>&1 || rc=$?
+  assert_ne "$rc" "0"
   assert_eq "$(cat "$(statefile)")" "$before"
   d="$(dirname "$(statefile)")"
   assert_eq "$(find "$d" -name '*.tmp*' | wc -l | tr -d ' ')" "0"
@@ -137,20 +151,23 @@ test_temporaerdatei_liegt_im_zielverzeichnis_und_bleibt_nicht_liegen() {
 test_symlink_als_zustandsdatei_wird_abgelehnt() {
   d="$(dirname "$(statefile)")"; mkdir -p "$d"
   ln -s /dev/null "$(statefile)"
-  "$STORE" set /p/eins openai/a >/dev/null 2>&1; assert_status "$?" 6
+  rc=0; "$STORE" set /p/eins openai/a >/dev/null 2>&1 || rc=$?
+  assert_status "$rc" 6
   [ -L "$(statefile)" ] || fail "der Symlink wurde ersetzt statt abgelehnt"
 }
 
 test_zustandsdatei_ueber_der_grenze_wird_abgelehnt() {
   d="$(dirname "$(statefile)")"; mkdir -p "$d"
   head -c 1048577 /dev/zero | tr '\0' 'a' > "$(statefile)"
-  "$STORE" get /p/eins >/dev/null 2>&1; assert_status "$?" 8
+  rc=0; "$STORE" get /p/eins >/dev/null 2>&1 || rc=$?
+  assert_status "$rc" 8
 }
 
 test_unbekannte_schemaversion_wird_nicht_geraten() {
   d="$(dirname "$(statefile)")"; mkdir -p "$d"
   printf '{"schemaVersion":99,"projects":{}}' > "$(statefile)"
-  "$STORE" set /p/eins openai/a >/dev/null 2>&1; assert_status "$?" 7
+  rc=0; "$STORE" set /p/eins openai/a >/dev/null 2>&1 || rc=$?
+  assert_status "$rc" 7
   assert_contains "$(cat "$(statefile)")" '"schemaVersion":99'
 }
 
@@ -163,8 +180,8 @@ test_kaputtes_json_wird_nicht_stillschweigend_ersetzt() {
   # verschiedene Meldungen. Nur "$?" != 0 zu pruefen haette auch bei Exit
   # 127 (Skript fehlt) oder einem Usage-Fehler bestanden und nie belegt,
   # dass die Datei tatsaechlich unangetastet blieb.
-  "$STORE" set /p/eins openai/a >/dev/null 2>&1
-  assert_status "$?" 9
+  rc=0; "$STORE" set /p/eins openai/a >/dev/null 2>&1 || rc=$?
+  assert_status "$rc" 9
   assert_eq "$(cat "$(statefile)")" "$before"
 }
 

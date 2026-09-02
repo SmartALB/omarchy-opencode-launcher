@@ -58,12 +58,30 @@ stub_calls() { local n="$1"; [ -f "$SANDBOX/log/$n.log" ] && wc -l < "$SANDBOX/l
 stub_log()   { cat "$SANDBOX/log/$1.log" 2>/dev/null || true; }
 
 run_tests() {
-  local fn
+  local fn rc
   for fn in $(declare -F | awk '{print $3}' | grep '^test_' | sort); do
-    if ( set -e; setup_sandbox; "$fn" ) >/dev/null 2>"$SANDBOX_ERR"; then
+    # Ruling 15: NICHT als "if ( ... ); then ... fi" -- Bash setzt die
+    # errexit-Wirkung fuer alles ausser Kraft, was Teil einer if/while/until-
+    # Bedingung ist, und zwar auch innerhalb einer Subshell, die selbst
+    # erneut "set -e" setzt. Ein blosser fehlschlagender Befehl in einem
+    # Test (kein assert_*, kein explizites exit) wurde dadurch als "ok"
+    # gemeldet: "if ( set -e; false; echo NACH ); then echo OK; else echo
+    # FAIL; fi" gibt NACH und OK aus, nie FAIL. Deshalb die Subshell erst
+    # ausserhalb jeder Bedingung ausfuehren und ihren Status danach in einer
+    # eigenen Anweisung einfangen.
+    ( set -e; setup_sandbox; "$fn" ) >/dev/null 2>"$SANDBOX_ERR"
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
       PASS=$((PASS+1)); printf '  ok   %s\n' "$fn"
     else
       FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$fn"; cat "$SANDBOX_ERR" >&2
     fi
   done
+  # Eigener Rueckgabewert statt implizit dem letzten Befehl der Schleife
+  # ueberlassen ("cat" im FAIL-Zweig gelingt fast immer und wuerde run_tests
+  # selbst wieder auf 0 zurueckfallen lassen, egal wie viele Tests scheiterten).
+  # Damit gibt "bash irgendeine.test.sh" (run_tests ist deren letzte Anweisung)
+  # jetzt zuverlaessig einen von 0 verschiedenen Exit-Status zurueck, sobald
+  # mindestens ein Test FAIL gemeldet hat.
+  [ "$FAIL" -eq 0 ]
 }

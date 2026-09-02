@@ -79,20 +79,32 @@ test_read_capped_nimmt_max_und_lehnt_max_plus_eins_ab() {
   head -c 100 /dev/zero | tr '\0' 'a' > "$f"
   out="$(read_capped "$f" 100)"; assert_eq "${#out}" 100
   head -c 101 /dev/zero | tr '\0' 'a' > "$f"
-  read_capped "$f" 100 >/dev/null; assert_status "$?" 8
+  # Ruling 15, Nachbeben: "cmd; assert_status \"\$?\" N" ist unter echtem
+  # set -e nicht sicher, wenn N != 0 ist -- ein fehlschlagender Befehl, der
+  # kein Teil eines if/&&/||/! ist, bricht die Funktion sofort ab, BEVOR
+  # assert_status je laeuft. Solange run_tests dieses set -e selbst per
+  # if-Bedingung ausser Kraft setzte, fiel das nie auf; seit dem Fix von
+  # Ruling 15 wirkt set -e wieder echt, und dieser Test brach hier ab,
+  # bevor der Exit-Code je geprueft wurde. Fix: "cmd || rc=\$?" nutzt die
+  # ||-Ausnahme von set -e, um den erwarteten Fehlschlag einzufangen, ohne
+  # ihn zum Abbruch zu machen.
+  rc=0; read_capped "$f" 100 >/dev/null || rc=$?
+  assert_status "$rc" 8
 }
 
 test_read_capped_zaehlt_bytes_nicht_zeichen() {
   . "$COMMON"
   f="$SANDBOX/f"; printf 'ääää' > "$f"   # 8 Bytes, 4 Zeichen
-  read_capped "$f" 7 >/dev/null; assert_status "$?" 8
+  rc=0; read_capped "$f" 7 >/dev/null || rc=$?
+  assert_status "$rc" 8
   out="$(read_capped "$f" 8)"; assert_eq "$?" 0
 }
 
 test_read_capped_zaehlt_abschliessende_zeilenumbrueche_mit() {
   . "$COMMON"
   f="$SANDBOX/f"; printf 'ab\n\n' > "$f"  # 4 Bytes
-  read_capped "$f" 3 >/dev/null; assert_status "$?" 8
+  rc=0; read_capped "$f" 3 >/dev/null || rc=$?
+  assert_status "$rc" 8
 }
 
 test_bin_standards_sind_absolut() {
@@ -113,7 +125,8 @@ test_bin_standards_sind_absolut() {
 
 test_read_stream_capped_begrenzt_stdin() {
   . "$COMMON"
-  printf 'abcd' | read_stream_capped 3 >/dev/null; assert_status "$?" 8
+  rc=0; printf 'abcd' | read_stream_capped 3 >/dev/null || rc=$?
+  assert_status "$rc" 8
   out="$(printf 'abc' | read_stream_capped 3)"; assert_eq "$out" "abc"
 }
 
@@ -135,7 +148,8 @@ test_read_capped_zaehlt_nul_bytes_korrekt() {
   . "$COMMON"
   f="$SANDBOX/f.nul"
   head -c 9 /dev/zero > "$f"                 # 9 NUL-Bytes, max=8
-  read_capped "$f" 8 >/dev/null; assert_status "$?" 8
+  rc=0; read_capped "$f" 8 >/dev/null || rc=$?
+  assert_status "$rc" 8
 
   head -c 8 /dev/zero > "$f"                 # genau 8 NUL-Bytes, max=8
   out_f="$SANDBOX/out.nul"
@@ -148,7 +162,8 @@ test_read_stream_capped_zaehlt_nul_bytes_korrekt() {
   . "$COMMON"
   in_f="$SANDBOX/in.nul"
   head -c 9 /dev/zero > "$in_f"              # 9 NUL-Bytes, max=8
-  read_stream_capped 8 < "$in_f" >/dev/null; assert_status "$?" 8
+  rc=0; read_stream_capped 8 < "$in_f" >/dev/null || rc=$?
+  assert_status "$rc" 8
 
   head -c 8 /dev/zero > "$in_f"              # genau 8 NUL-Bytes, max=8
   out_f="$SANDBOX/out2.nul"
