@@ -18,18 +18,33 @@ REAL_CFG="$HOME/.config/omarchy"
 marker="$(mktemp)"
 
 total_pass=0; total_fail=0
+# Minor aus der Review: eine Suite, die vor run_tests abstuerzt (Syntaxfehler,
+# fehlende Quelle wie ein noch nicht angelegtes bin/*.sh), traegt weder zu
+# "ok" noch zu "FAIL" bei -- der Lauf blieb bislang trotzdem gruen. Deshalb
+# zusaetzlich den Exit-Status jeder Suite selbst pruefen.
+declare -a suite_errors=()
 for suite in test/*.test.sh; do
   printf '\n== %s\n' "$(basename "$suite")"
   # shellcheck disable=SC1090
-  out="$(bash "$suite")" ; printf '%s\n' "$out"
+  out="$(bash "$suite")"; suite_status=$?
+  printf '%s\n' "$out"
   total_pass=$((total_pass + $(printf '%s' "$out" | grep -c '^  ok  ' || true)))
   total_fail=$((total_fail + $(printf '%s' "$out" | grep -c '^  FAIL' || true)))
+  if [ "$suite_status" -ne 0 ]; then
+    suite_errors+=("$(basename "$suite") (Exit $suite_status)")
+  fi
 done
 
 leaked="$(find "$REAL_STATE" "$REAL_CACHE" "$REAL_CFG" -newer "$marker" 2>/dev/null | sort)"
 if [ -n "$leaked" ]; then
   printf '\nSANDBOX-LECK: eine Suite hat echte Dateien angefasst:\n%s\n' "$leaked" >&2
   exit 2
+fi
+
+if [ "${#suite_errors[@]}" -gt 0 ]; then
+  printf '\nSUITE-FEHLER: folgende Suiten sind abgebrochen, statt ihre Tests durchzufuehren:\n' >&2
+  printf '  %s\n' "${suite_errors[@]}" >&2
+  exit 1
 fi
 
 printf '\n%s bestanden, %s fehlgeschlagen\n' "$total_pass" "$total_fail"
