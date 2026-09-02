@@ -102,9 +102,32 @@ if [ -f "$STATE" ]; then
     if [ "$ver" != "1" ]; then
       die_json "state-schema-unknown" 7
     fi
+    # Ruling 35 (2): Runde 3 (Ruling 28) pruefte, dass ".projects" und
+    # jeder seiner Werte ein Objekt ist -- das liess einen wohlgeformten
+    # Projekteintrag mit einem NICHT-string ".model" durch, z.B.
+    # "{"projects":{"/p":{"model":["x"]}}}". Der letzte jq-Aufruf stuerzte
+    # dann an "split" ab ("split input and separator must be strings"),
+    # weil "split" nur auf Strings arbeitet. Ein einziger jq-Aufruf prueft
+    # jetzt beides zusammen: Form UND, wo ".model" ueberhaupt vorkommt,
+    # dessen Typ. jq wertet den "and"-Ausdruck kurzschliessend aus (jede
+    # Teilbedingung reduziert vorher per "all" auf einen einzelnen
+    # Wahrheitswert) -- ein fruehes "false" wegen falscher Form verhindert
+    # zuverlaessig, dass die dritte Teilbedingung ".model" auf einem
+    # Nicht-Objekt aufruft und selbst abstuerzt; mit --argjson belegt und
+    # gegengeprueft (siehe Fix-Report).
+    #
+    # Fehlt ".model" ganz (kein Schluessel), ist das gueltig -- "kein
+    # Modell gemerkt". Ein VORHANDENES ".model", das kein String ist
+    # (Array, Objekt, Zahl, oder explizit null), ist das nicht: der
+    # Schreiber (omarchy-opencode-store) setzt ".model" immer auf einen
+    # gueltigen Modell-String oder entfernt den Schluessel komplett
+    # (ueber "unset") -- alles andere ist eine fremde oder beschaedigte
+    # Datei.
     shape_ok="$(printf '%s' "$s" | "$BIN_JQ" -r '
       (.projects // {}) as $p
-      | ($p | type == "object") and ([$p[] | type == "object"] | all)' 2>/dev/null)"
+      | ($p | type == "object")
+        and ([$p[] | type == "object"] | all)
+        and ([$p[] | (has("model") | not) or (.model | type == "string")] | all)' 2>/dev/null)"
     if [ "$shape_ok" != "true" ]; then
       die_json "state-invalid" 9
     fi
@@ -200,15 +223,23 @@ fi
     # nach dem Pipe das neue "."), nicht gegen die Zeile -- der Vergleich
     # traefe dann nie und running bliebe immer false.
     | ($row[1]) as $p
-    # Ruling 28 (b): Gueltigkeitspruefung und defensiver Filter beantworten
-    # verschiedene Fragen. Die Pruefung oben entscheidet, OB ueberhaupt
-    # weitergemacht wird; dieser Ausdruck hier garantiert zusaetzlich, dass
-    # KEINE Form -- heute oder in einer kuenftigen schemaVersion -- diesen
-    # Aufruf mit leerem stdout abstuerzen laesst, selbst wenn die Pruefung
-    # oben je eine Luecke haette. Ohne das "if type == "object"" wuerde
-    # z.B. "$state.projects[$p].model" bei einem String-Wert mit "Cannot
-    # index string with string" abbrechen (siehe Review-Repro).
-    | (($state.projects[$p] // {}) | if type == "object" then (.model // null) else null end) as $m
+    # Ruling 35 (1): EIN Koerzierungspunkt statt eines weiteren
+    # Typ-Checks. Ruling 28 (b) machte "$m" bereits robust gegen einen
+    # Nicht-Objekt-Wert unter ".projects[$p]"; das liess aber einen Wert
+    # wie "{"model":["x"]}" durch (Objekt, aber ".model" kein String), an
+    # dem "split" weiter unten abstuerzte. Diese Zeile garantiert
+    # stattdessen STRUKTURELL, dass "$m" danach IMMER ein String oder
+    # null ist -- keine dritte, vierte, fuenfte Form muss hier je einzeln
+    # aufgezaehlt werden, weil jeder Wert, der weder Objekt->String noch
+    # von vornherein null ist, in der letzten Zeile auf null faellt. Jede
+    # nachgelagerte Verwendung ("split", modelLabel, modelKnown) ist damit
+    # per Konstruktion sicher, nicht durch eine zweite Pruefung. Die
+    # Validierung weiter oben ist das separate Sicherheitsnetz, das den
+    # Benutzer informiert -- diese Zeile hier verhindert nur den Absturz,
+    # sie meldet nichts.
+    | (($state.projects[$p] // {})
+       | if type == "object" then (.model // null) else null end
+       | if type == "string" then . else null end) as $m
     | { name: $row[0], path: $p, displayPath: $row[2], appId: $row[3],
         pinned: ($row[4] == "true"), exists: ($row[5] == "true"), capped: $capped,
         running: ($classes | index($row[3]) != null),

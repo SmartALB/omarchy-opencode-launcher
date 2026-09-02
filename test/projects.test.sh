@@ -20,6 +20,28 @@ write_config() {  # write_config <json>
   printf '%s' "$1" > "$HOME/.config/omarchy/opencode-launcher.json"
 }
 
+# Ruling 35 (3): Helfer fuer den tabellengetriebenen Kombinationstest unten.
+# "$state_file" wird von der aufrufenden Testfunktion per "local" gesetzt --
+# Bash-Funktionen sehen die lokalen Variablen ihres Aufrufers dynamisch,
+# daher ist das kein globaler Seiteneffekt.
+assert_kombi_invariant() {  # <label> <projects[$p]-JSON-Wert> <valid:true|false>
+  local label="$1" project_value="$2" expect_valid="$3" out rc kind err
+  printf '{"schemaVersion":1,"projects":{"%s":%s}}' "$SANDBOX/p" "$project_value" > "$state_file"
+  rc=0
+  out="$("$PROJ" list --json)" || rc=$?
+  printf '%s' "$out" | jq -e . >/dev/null 2>&1 \
+    || fail "[$label] stdout ist kein gueltiges JSON: $out"
+  if [ "$expect_valid" = "true" ]; then
+    kind="$(printf '%s' "$out" | jq -r 'if type == "array" then "array" else "other" end')"
+    [ "$kind" = "array" ] || fail "[$label] erwartet: gueltiges Array" "erhalten: $out"
+    assert_status "$rc" 0
+  else
+    err="$(printf '%s' "$out" | jq -r '.error // "FEHLT"')"
+    [ "$err" = "state-invalid" ] || fail "[$label] erwartet .error=state-invalid" "erhalten: $err (voller Inhalt: $out)"
+    assert_status "$rc" 9
+  fi
+}
+
 test_gepinnte_projekte_erscheinen_in_config_reihenfolge() {
   setup_common
   mkdir -p "$SANDBOX/a" "$SANDBOX/b"
@@ -411,6 +433,60 @@ test_kaputte_formen_liefern_immer_gueltiges_json_mit_fehler() {
       || fail "Zeile [$target -> $expected_error]: stdout ist kein gueltiges JSON: $out"
     assert_eq "$(printf '%s' "$out" | jq -r '.error // "FEHLT"')" "$expected_error"
     assert_status "$rc" "$expected_exit"
+  done
+}
+
+# Ruling 35 (3): Kreuzprodukt statt einer weiteren Einzelzeile. Runde 3
+# (Ruling 28) schloss "welche Form hat .projects[$p]" ab; offen blieb
+# "welche Form hat .model INNERHALB eines wohlgeformten Projekteintrags"
+# ({"model":["x"]} bestand beide bisherigen Pruefungen und stuerzte an
+# "split" ab). Zwei verschachtelte Schleifen statt einer flachen Tabelle:
+# aeussere Schleife ueber die Form von ".projects[$p]" selbst (Objekt,
+# String, Array, Zahl, null), und NUR wenn diese ein Objekt ist, eine
+# innere Schleife ueber die Form von ".model" darin (String, fehlend,
+# Array, Objekt, Zahl, null) -- macht 6 + 4 = 10 tatsaechlich
+# unterscheidbare Faelle. Eine Ausweitung auf den vollen 5x6-Raster (30)
+# wuerde die 20 zusaetzlichen Zellen nur mit demselben Nicht-Objekt-JSON
+# mehrfach fuellen, weil ".model" bei einem Nicht-Objekt-Wert nie erreicht
+# wird -- weder von der Validierung oben (die zuerst "ist .projects[$p]
+# ueberhaupt ein Objekt" prueft) noch von der Koerzierung im letzten jq
+# (die aus demselben Grund zuerst prueft). Reine Wiederholung waere keine
+# zusaetzliche Abdeckung.
+test_kombinationen_aus_projekt_und_modell_form_liefern_immer_gueltiges_json() {
+  setup_common
+  mkdir -p "$SANDBOX/p"
+  write_config "{\"projects\":[{\"name\":\"P\",\"path\":\"$SANDBOX/p\"}]}"
+  state_dir="$XDG_STATE_HOME/omarchy/smartalb-opencode"
+  state_file="$state_dir/projects.json"
+  mkdir -p "$state_dir"
+  local outer_kinds=(object string array number null)
+  local model_kinds=(string absent array object number null)
+  local outer model project_value
+  for outer in "${outer_kinds[@]}"; do
+    if [ "$outer" = "object" ]; then
+      for model in "${model_kinds[@]}"; do
+        case "$model" in
+          string) project_value='{"model":"openai/gpt-x"}' ;;
+          absent) project_value='{}' ;;
+          array)  project_value='{"model":["x"]}' ;;
+          object) project_value='{"model":{"a":1}}' ;;
+          number) project_value='{"model":42}' ;;
+          null)   project_value='{"model":null}' ;;
+        esac
+        case "$model" in
+          string|absent) assert_kombi_invariant "$outer/$model" "$project_value" true ;;
+          *)              assert_kombi_invariant "$outer/$model" "$project_value" false ;;
+        esac
+      done
+    else
+      case "$outer" in
+        string) project_value='"just-a-string"' ;;
+        array)  project_value='[]' ;;
+        number) project_value='42' ;;
+        null)   project_value='null' ;;
+      esac
+      assert_kombi_invariant "$outer" "$project_value" false
+    fi
   done
 }
 
