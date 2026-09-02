@@ -11,8 +11,13 @@ test_set_dann_get_gibt_das_modell_zurueck() {
 }
 
 test_get_ohne_eintrag_ist_leer_und_erfolgreich() {
-  assert_eq "$("$STORE" get /p/nichts)" ""
-  assert_status "$?" 0
+  # Vorsicht: "assert_eq \"\$(...)\" \"\"" gefolgt von "assert_status \"\$?\" 0"
+  # pruefte in Wahrheit den Exit-Code von assert_eq, nicht den von "store
+  # get" -- assert_eq laeuft dazwischen und ueberschreibt $?. Der Aufruf und
+  # die Erfassung von $? muessen in derselben Anweisung stehen.
+  out="$("$STORE" get /p/nichts)"; rc=$?
+  assert_eq "$out" ""
+  assert_status "$rc" 0
 }
 
 test_set_lehnt_kaputte_modell_id_ab_ohne_zu_schreiben() {
@@ -75,8 +80,15 @@ test_unbekannte_schemaversion_wird_nicht_geraten() {
 test_kaputtes_json_wird_nicht_stillschweigend_ersetzt() {
   d="$(dirname "$(statefile)")"; mkdir -p "$d"
   printf '{ das ist kein json' > "$(statefile)"
+  before="$(cat "$(statefile)")"
+  # Ruling 10: 9 = "Datei ist kein gueltiges JSON", eigenstaendig neben 7
+  # ("unbekannte schemaVersion") dokumentiert -- verschiedene Ursachen,
+  # verschiedene Meldungen. Nur "$?" != 0 zu pruefen haette auch bei Exit
+  # 127 (Skript fehlt) oder einem Usage-Fehler bestanden und nie belegt,
+  # dass die Datei tatsaechlich unangetastet blieb.
   "$STORE" set /p/eins openai/a >/dev/null 2>&1
-  assert_ne "$?" "0"
+  assert_status "$?" 9
+  assert_eq "$(cat "$(statefile)")" "$before"
 }
 
 run_tests
