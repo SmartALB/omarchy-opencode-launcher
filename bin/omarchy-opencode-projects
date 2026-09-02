@@ -59,6 +59,16 @@ if [ -n "$cfg_file" ]; then
   # "if type != object" zuerst, weil ".projects" auf einem Array oder einem
   # String selbst mit einem jq-Fehler abbricht; ".path?" statt ".path" aus
   # demselben Grund innerhalb der Eintragspruefung.
+  #
+  # Abschluss-Review (final): ".name", wo vorhanden, muss ebenfalls ein
+  # String sein. Ohne diese Klausel bricht "@tsv" weiter unten an einem
+  # Objekt oder Array unter ".name" ab, "2>/dev/null || true" verschluckt
+  # den Fehler, und die Zeilen, die jq schon ausgegeben hatte, BEVOR es
+  # abbrach, bleiben stehen -- eine halb gelesene Liste mit Exit 0, genau
+  # das, was der Kommentar oben ueber ".path" als schlimmer als eine
+  # gemeldete Liste bezeichnet. Derselbe Massstab wie an ".model" im
+  # Zustand weiter unten: ein VORHANDENES Feld, das kein String ist, ist
+  # ein Fehler, kein fehlendes Feld ist gueltig ("" als Vorgabe).
   cfg_ok="$(printf '%s' "$raw" | "$BIN_JQ" -r '
     if type != "object" then false
     else
@@ -66,7 +76,8 @@ if [ -n "$cfg_file" ]; then
       and ([(.projects // [])[]
              | (type == "object")
                and (((.path?) // null) as $q
-                    | ($q | type) == "string" and ($q | length) > 0)] | all)
+                    | ($q | type) == "string" and ($q | length) > 0)
+               and (((.name?) // "") | type == "string")] | all)
     end' 2>/dev/null)"
   [ "$cfg_ok" = "true" ] || die_json "config-invalid" 9
   cfg="$raw"
@@ -183,8 +194,15 @@ if [ -f "$CACHE" ]; then
 fi
 
 # --- Pfade sammeln: gepinnt, dann Recents, gekappt VOR allem Weiteren --------
+# "path" zuerst, "name" zuletzt: Tab ist ein IFS-Leerraumzeichen, "read"
+# fasst also einen fehlenden ("name" // "") am ENDE der Zeile klaglos mit
+# dem vorherigen Feld zusammen -- ein leeres Feld in der MITTE wuerde
+# dagegen mit dem naechsten verschmelzen und die Spalten verschieben (dann
+# laese "name" den Pfad, "rawpath" bliebe leer, und die Zeile faele der
+# Pruefung "[ -n "$rawpath" ]" zum Opfer). Deshalb hier nicht wieder aus
+# Ordentlichkeitsgruenden zuruecktauschen.
 pinned_tsv="$(printf '%s' "$cfg" | "$BIN_JQ" -r '
-  (.projects // [])[] | [(.name // ""), (.path // "")] | @tsv' 2>/dev/null || true)"
+  (.projects // [])[] | [(.path // ""), (.name // "")] | @tsv' 2>/dev/null || true)"
 
 declare -a PATHS=() NAMES=() PINNED=()
 CAPPED=false
@@ -193,7 +211,7 @@ add() {
   PATHS+=("$1"); NAMES+=("$2"); PINNED+=("$3")
 }
 
-while IFS=$'\t' read -r name rawpath; do
+while IFS=$'\t' read -r rawpath name; do
   [ -n "$rawpath" ] || continue
   p="$(expand_path "$rawpath")"
   [ -n "$name" ] || name="$(tilde_abbrev "$p")"

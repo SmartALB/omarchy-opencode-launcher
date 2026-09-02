@@ -10,6 +10,11 @@ pull request is not picked up by the marketplace repository.
 
 https://github.com/SmartALB/omarchy-opencode-launcher.git
 
+The submission itself is made from a fresh `git clone` (or `git archive`)
+of this repository, never from the author's own working directory --
+untracked material such as `docs/superpowers/` (see `.gitignore`) is
+therefore never part of the submitted tree.
+
 ## Category
 
 Developer Tools

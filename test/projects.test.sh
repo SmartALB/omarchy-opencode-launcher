@@ -52,6 +52,22 @@ test_gepinnte_projekte_erscheinen_in_config_reihenfolge() {
   assert_eq "$(printf '%s' "$out" | jq -r '.[0].pinned')" "true"
 }
 
+# Abschluss-Review (final), Fix 1: das optionale Feld ("name") steht in
+# @tsv jetzt ZULETZT, nicht mehr zuerst -- ein Eintrag ohne "name" darf
+# weder verschwinden noch die Spalten des naechsten Eintrags verschieben.
+# Zwei Eintraege, nur der zweite ohne "name": beide muessen erscheinen, und
+# der zweite faellt auf den mit "~" abgekuerzten Pfad zurueck.
+test_gepinntes_projekt_ohne_name_wird_nicht_verworfen() {
+  setup_common
+  mkdir -p "$SANDBOX/a" "$HOME/proj2"
+  write_config "{\"projects\":[{\"name\":\"Eins\",\"path\":\"$SANDBOX/a\"},{\"path\":\"$HOME/proj2\"}]}"
+  out="$("$PROJ" list --json)"
+  assert_eq "$(printf '%s' "$out" | jq -r 'length')" "2"
+  assert_eq "$(printf '%s' "$out" | jq -r '.[0].name')" "Eins"
+  assert_eq "$(printf '%s' "$out" | jq -r '.[1].path')" "$HOME/proj2"
+  assert_eq "$(printf '%s' "$out" | jq -r '.[1].name')" "~/proj2"
+}
+
 test_alte_config_datei_wird_als_rueckfall_gelesen() {
   setup_common
   mkdir -p "$SANDBOX/a" "$HOME/.config/omarchy"
@@ -243,6 +259,13 @@ test_kaputte_config_formen_melden_config_invalid() {
     $'{"projects":[{"name":"A","path":42}]}\tconfig-invalid\t9'
     # Eintrag ohne Objektform.
     $'{"projects":["nur ein string"]}\tconfig-invalid\t9'
+    # Abschluss-Review (final), Fix 2: Eintrag, dessen "name" kein String
+    # ist -- ohne die Klausel bricht "@tsv" dort ab, "|| true" verschluckt
+    # den Fehler, und die zuvor gueltige Zeile ("gut") bliebe als halb
+    # gelesene Liste mit Exit 0 stehen statt als gemeldeter Fehler.
+    $'{"projects":[{"path":"/x1","name":"gut"},{"path":"/x2","name":{"a":1}}]}\tconfig-invalid\t9'
+    # Dieselbe Form noch einmal mit einer Zahl statt eines Objekts.
+    $'{"projects":[{"path":"/x","name":42}]}\tconfig-invalid\t9'
     # Und die Gegenprobe: eine leere, aber richtige Config bleibt gueltig.
     # "-" statt eines leeren Feldes: Tabulator ist ein IFS-Leerraumzeichen,
     # zwei aufeinanderfolgende Tabs fasst "read" also zu EINEM Trenner
