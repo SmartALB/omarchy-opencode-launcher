@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Removes the plugin. State and cache are left in place, so a reinstall
+# finds the remembered models again -- see README.md for how to clear them
+# on purpose.
+set -euo pipefail
+
+if [ "$(id -u)" = "0" ]; then
+  echo "uninstall: do not run as root -- this plugin needs no privileges" >&2
+  exit 1
+fi
+
+DEST="$HOME/.config/omarchy/plugins/smartalb.opencode"
+[ -d "$DEST" ] || { echo "Not installed."; exit 0; }
+rm -rf "$DEST"
+echo "Removed. Remembered models still live under"
+echo "  \${XDG_STATE_HOME:-\$HOME/.local/state}/omarchy/smartalb-opencode/"
+echo "and the cached model list under"
+echo "  \${XDG_CACHE_HOME:-\$HOME/.cache}/omarchy/smartalb.opencode/"

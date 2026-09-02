@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Installs the plugin for the current user. Performs nothing privileged and
+# touches nothing outside $HOME. There is no --system mode -- this plugin
+# needs no privileges anywhere.
+set -euo pipefail
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEST="$HOME/.config/omarchy/plugins/smartalb.opencode"
+
+if [ "$(id -u)" = "0" ]; then
+  echo "install: do not run as root -- this plugin needs no privileges" >&2
+  exit 1
+fi
+
+if [ "$SRC" != "$DEST" ]; then
+  mkdir -p "$DEST"
+  cp -a "$SRC"/. "$DEST"/
+fi
+
+chmod +x "$DEST"/bin/* "$DEST"/test/run.sh
+[ -f "$DEST"/test/mutation.sh ] && chmod +x "$DEST"/test/mutation.sh
+
+echo "Installed to $DEST."
+echo "Add the widget: Bar settings, then 'opencode Launcher'."
+echo "After that: omarchy-restart-shell"
