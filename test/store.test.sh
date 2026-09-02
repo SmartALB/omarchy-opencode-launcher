@@ -41,14 +41,91 @@ test_sterne_werden_gehalten_und_entfernt() {
   assert_not_contains "$("$STORE" stars)" "openai/a"
 }
 
-test_schreiben_ist_atomar_die_alte_datei_bleibt_bei_abbruch() {
+# Ruling 12: die alte, einzelne Atomaritaets-Testfunktion setzte den
+# jq-Doppelgaenger auch fuer den lesenden schemaVersion-Aufruf in load()
+# ein. Dieser scheiterte dort zuerst, load() gab 9 zurueck, und weder der
+# Transform-jq in edit() (Zeile 57) noch publish() (Zeile 58) -- also weder
+# mktemp noch mv -- wurden je erreicht. Der Test war damit ein Duplikat von
+# test_kaputtes_json_wird_nicht_stillschweigend_ersetzt unter anderem Namen
+# und deckte keinen der drei Fehlerpfade ab, die diese Aufgabe eigentlich
+# absichern soll. Ersetzt durch drei Tests, je einer pro Fehlerpfad.
+
+test_set_transform_jq_schlaegt_fehl_nachdem_das_lesen_gelang() {
   "$STORE" set /p/eins openai/a >/dev/null
   before="$(cat "$(statefile)")"
-  # jq-Doppelgaenger, der scheitert: der Ersatzinhalt darf nie entstehen.
-  # Ueber JQ_BIN, nicht ueber den PATH -- das Skript ruft jq absolut auf.
-  make_stub jq 'exit 3'
-  JQ_BIN="$SANDBOX/stub/jq" "$STORE" set /p/eins openai/b >/dev/null 2>&1 || true
+  # Doppelgaenger mit Zaehler in $SANDBOX: der erste jq-Aufruf (das lesende
+  # schemaVersion-jq in load(), Zeile 30) geht unveraendert an den echten
+  # jq durch -- load() muss also gelingen. Erst der zweite Aufruf (die
+  # Transformation in edit(), Zeile 57) scheitert, und zwar nicht still:
+  # er gibt vor dem Scheitern noch etwas auf stdout aus, damit die Pruefung
+  # wirklich das "|| return 1" nach dem Transform-jq trifft und nicht
+  # zufaellig durch publish()s Leerinhalts-Waechter (Zeile 48) abgefangen
+  # wird, der nur bei WIRKLICH leerer Ausgabe greift. Ueber JQ_BIN, nicht
+  # ueber den PATH -- das Skript ruft jq absolut auf.
+  cat > "$SANDBOX/stub/jq" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$SANDBOX/log/jq.log"
+n_file="$SANDBOX/jq-calls.count"
+n=\$(( \$(cat "\$n_file" 2>/dev/null || echo 0) + 1 ))
+printf '%s' "\$n" > "\$n_file"
+if [ "\$n" -eq 1 ]; then
+  exec /usr/bin/jq "\$@"
+else
+  printf 'sollte-nie-geschrieben-werden'
+  exit 3
+fi
+STUB
+  chmod +x "$SANDBOX/stub/jq"
+
+  JQ_BIN="$SANDBOX/stub/jq" "$STORE" set /p/eins openai/b >/dev/null 2>&1
+  assert_ne "$?" "0"
   assert_eq "$(cat "$(statefile)")" "$before"
+  d="$(dirname "$(statefile)")"
+  assert_eq "$(find "$d" -name '*.tmp*' | wc -l | tr -d ' ')" "0"
+  # Beleg aus dem Log des Doppelgaengers, dass der zweite jq-Aufruf
+  # tatsaechlich stattfand -- sonst koennte der Test unbemerkt zurueck in
+  # den reinen Lesepfad abdriften, den load() schon allein abdeckt.
+  assert_eq "$(stub_calls jq)" "2"
+}
+
+test_set_transform_jq_liefert_leere_ausgabe() {
+  "$STORE" set /p/eins openai/a >/dev/null
+  before="$(cat "$(statefile)")"
+  # Doppelgaenger: der erste Aufruf (Lesen) geht durch, der zweite
+  # (Transformation) meldet Erfolg (Exit 0), liefert aber nichts auf
+  # stdout. publish()s eigener Leerinhalts-Waechter (Zeile 48) muss das
+  # auffangen, sonst wuerde die alte Datei durch eine leere ersetzt.
+  cat > "$SANDBOX/stub/jq" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$SANDBOX/log/jq.log"
+n_file="$SANDBOX/jq-calls.count"
+n=\$(( \$(cat "\$n_file" 2>/dev/null || echo 0) + 1 ))
+printf '%s' "\$n" > "\$n_file"
+if [ "\$n" -eq 1 ]; then exec /usr/bin/jq "\$@"; fi
+# zweiter und jeder weitere Aufruf: Erfolg (Exit 0), aber keine Ausgabe.
+STUB
+  chmod +x "$SANDBOX/stub/jq"
+
+  JQ_BIN="$SANDBOX/stub/jq" "$STORE" set /p/eins openai/b >/dev/null 2>&1
+  assert_ne "$?" "0"
+  assert_eq "$(cat "$(statefile)")" "$before"
+  d="$(dirname "$(statefile)")"
+  assert_eq "$(find "$d" -name '*.tmp*' | wc -l | tr -d ' ')" "0"
+  assert_eq "$(stub_calls jq)" "2"
+}
+
+test_set_mv_schlaegt_fehl_alte_datei_bleibt_ohne_rest() {
+  "$STORE" set /p/eins openai/a >/dev/null
+  before="$(cat "$(statefile)")"
+  # mv scheitert erst NACH einer erfolgreichen Transformation: mktemp und
+  # der schreibende cat laufen echt, nur der abschliessende Rename schlaegt
+  # fehl. Ueber MV_BIN, nicht ueber den PATH -- das Skript ruft mv absolut auf.
+  make_stub mv 'exit 1'
+  MV_BIN="$SANDBOX/stub/mv" "$STORE" set /p/eins openai/b >/dev/null 2>&1
+  assert_ne "$?" "0"
+  assert_eq "$(cat "$(statefile)")" "$before"
+  d="$(dirname "$(statefile)")"
+  assert_eq "$(find "$d" -name '*.tmp*' | wc -l | tr -d ' ')" "0"
 }
 
 test_temporaerdatei_liegt_im_zielverzeichnis_und_bleibt_nicht_liegen() {

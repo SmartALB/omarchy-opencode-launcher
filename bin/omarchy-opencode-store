@@ -38,6 +38,12 @@ publish() {
   local tmp
   mkdir -p "$STATE_DIR" || return 1
   [ ! -L "$STATE" ] || { echo "$ME: $STATE ist ein Symlink" >&2; return 6; }
+  # Ruling 13: waere $STATE in diesem Moment z.B. ein Verzeichnis, wuerde
+  # "mv -f tmp $STATE" die Temporaerdatei still HINEIN verschieben und mit
+  # Erfolg zurueckkehren -- die Zustandsdatei selbst bliebe dabei ungeschrieben,
+  # ohne dass irgendein Fehler gemeldet wuerde. Nicht existieren bleibt
+  # erlaubt: das ist der normale Fall beim allerersten Schreiben.
+  [ ! -e "$STATE" ] || [ -f "$STATE" ] || { echo "$ME: $STATE ist keine einfache Datei" >&2; return 6; }
   # ".tmp." im Namen, nicht nur eine Punkt-Praefix-Konvention: Task 2's
   # eigener Test sucht Leichen mit "find -name '*.tmp*'" -- ein Name ohne
   # dieses Teilwort wuerde einen liegen gebliebenen Rest unsichtbar machen

@@ -25,9 +25,17 @@ setup_sandbox() {
   mkdir -p "$HOME/.config/omarchy" "$XDG_STATE_HOME" "$XDG_CACHE_HOME" \
            "$SANDBOX/stub" "$SANDBOX/sysbin" "$SANDBOX/log"
   local tool toolpath
+  # chmod ergaenzt (Task 2, Fix Runde 2): fehlte bisher, wodurch sowohl
+  # make_stubs eigenes "chmod +x" als auch das Skript-eigene "chmod 600"
+  # in publish() innerhalb jedes Testlaufs still ins Leere liefen -- ein
+  # per Doppelgaenger erzeugter Ersatzbefehl blieb dadurch nicht ausfuehrbar
+  # und ein Aufruf schlug mit "Permission denied" fehl, statt das
+  # verabredete Doppelgaenger-Verhalten zu zeigen. Reine Erweiterung, keine
+  # Einschraenkung -- passend zum bereits breiteren Werkzeugkatalog dieser
+  # Harness.
   for tool in bash jq sed grep head tail cut cat mktemp mv rm mkdir basename dirname \
               readlink env printf sort tr wc sha1sum timeout sleep find stat ln id \
-              seq touch date awk sqlite3 diff cp; do
+              seq touch date awk sqlite3 diff cp chmod; do
     toolpath="$(command -v "$tool" 2>/dev/null)" || true
     [ -n "$toolpath" ] && ln -sf "$toolpath" "$SANDBOX/sysbin/$tool"
   done
