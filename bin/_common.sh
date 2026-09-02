@@ -84,15 +84,25 @@ app_id_for() {
 # nvidia/nemotron-3-120b-a12b", "nano-gpt/gemini-2.5-flash-preview-04-17:
 # thinking", "openrouter/~anthropic/claude-opus-latest") -- daher die
 # erweiterte, aber weiterhin abzaehlende Positivliste je Folgesegment.
+#
+# C9 (Abschluss-Review): das erste Zeichen darf KEIN "-" sein. Vorher
+# bestand "--config/x" die Modell-Pruefung und "-rf" die Agentennamen-
+# Pruefung. Ausnutzbar ist das heute nicht -- jeder dieser Werte steht in
+# der Argumentposition HINTER seinem eigenen Flag ("-m", "--agent"), wird
+# also nie selbst als Flag gelesen --, aber diese beiden Funktionen sind
+# genau die Stelle, auf der die ganze Einsetzungsgeschichte ruht, und ein
+# Wert, der wie ein Flag aussieht, hat dort keinen Grund erlaubt zu sein.
+# "-" bleibt INNERHALB der Segmente zugelassen (echte IDs brauchen es:
+# "gpt-oss-20b", "cloudflare-workers-ai").
 valid_model_id() {
   [ -n "${1:-}" ] || return 1
-  [[ "$1" =~ ^[A-Za-z0-9~._-]+(/[A-Za-z0-9._:@~+-]+)+$ ]] || return 1
+  [[ "$1" =~ ^[A-Za-z0-9~._][A-Za-z0-9~._-]*(/[A-Za-z0-9._:@~+-]+)+$ ]] || return 1
   return 0
 }
 
 valid_agent_name() {
   [ -n "${1:-}" ] || return 1
-  [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+  [[ "$1" =~ ^[A-Za-z0-9._][A-Za-z0-9._-]*$ ]] || return 1
   return 0
 }
 

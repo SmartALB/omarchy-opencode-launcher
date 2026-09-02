@@ -98,12 +98,68 @@ test_haengendes_opencode_wird_nach_der_frist_abgebrochen() {
   [ "$elapsed" -lt 5 ] || fail "erwartet: unter 5s" "erhalten: ${elapsed}s"
 }
 
-test_ohne_cache_und_ohne_opencode_ist_die_quelle_none() {
+# C12: hiess bis zum Abschluss-Review
+# "test_ohne_cache_und_ohne_opencode_ist_die_quelle_none" -- irrefuehrend:
+# opencode IST hier vorhanden und ausfuehrbar, es scheitert nur. "Fehlt
+# ganz" ist ein anderer Fall mit einem anderen Fehlercode
+# (opencode-missing) und hat seinen eigenen Test darunter.
+test_ohne_cache_und_mit_scheiterndem_opencode_ist_die_quelle_none() {
   make_stub opencode 'exit 1'
   export OPENCODE_BIN="$SANDBOX/stub/opencode"
   out="$("$MODELS" list --json)"
   assert_eq "$(printf '%s' "$out" | jq -r '.source')" "none"
   assert_eq "$(printf '%s' "$out" | jq -r '.models | length')" "0"
+}
+
+# C1 (Abschluss-Review): ein einziger schlechter "opencode models"-Lauf
+# (Erstlauf-Banner, kein Provider konfiguriert) schrieb bisher einen LEEREN
+# Katalog in den Zwischenspeicher und markierte ihn damit als frisch -- der
+# Picker blieb dann fuer catalogRefreshHours leer, obwohl der naechste
+# Aufruf funktioniert haette. Drei Zusicherungen: das leere Ergebnis geht
+# fuer DIESEN Aufruf hinaus, der bestehende Zwischenspeicher bleibt
+# byte-identisch UND behaelt seine mtime (sonst waere er neu "frisch",
+# selbst bei gleichem Inhalt), und der naechste Aufruf liefert wieder die
+# alten Modelle statt der Leere.
+test_leerer_katalog_vergiftet_den_zwischenspeicher_nicht() {
+  stub_opencode
+  "$MODELS" list --json >/dev/null
+  local before_content before_mtime
+  before_content="$(cat "$(cachefile)")"
+  before_mtime="$(stat -c %Y "$(cachefile)")"
+  touch -d '1 hour ago' "$(cachefile)"
+  before_mtime="$(stat -c %Y "$(cachefile)")"
+
+  # opencode antwortet jetzt mit einem Banner statt einer Liste: Exit 0,
+  # Ausgabe vorhanden, aber keine einzige gueltige Modell-ID darin.
+  make_stub opencode 'printf "%s\n" "opencode 1.18.25" "No providers configured."'
+  out="$(OC_REFRESH_HOURS=24 "$MODELS" list --json --refresh)"
+  assert_eq "$(printf '%s' "$out" | jq -r '.models | length')" "0"
+  assert_eq "$(printf '%s' "$out" | jq -r '.source')" "opencode"
+
+  assert_eq "$(cat "$(cachefile)")" "$before_content"
+  assert_eq "$(stat -c %Y "$(cachefile)")" "$before_mtime"
+
+  # Und der naechste Aufruf ohne --refresh serviert wieder die echten
+  # Modelle aus dem unberuehrten Zwischenspeicher.
+  out="$("$MODELS" list --json)"
+  assert_eq "$(printf '%s' "$out" | jq -r '.models | length')" "2"
+}
+
+# C4 (Abschluss-Review): read_capped meldet 8 fuer "zu gross" und 1 fuer
+# "nicht lesbar". Beides kam bisher als "cache-too-large" an -- gemessen an
+# einer 13 Byte grossen Datei mit chmod 000. "Berechtigung reparieren" und
+# "Platz schaffen" sind verschiedene Handlungen.
+test_unlesbarer_zwischenspeicher_meldet_nicht_zu_gross() {
+  stub_opencode
+  "$MODELS" list --json >/dev/null
+  # Klein genug, dass "zu gross" ausgeschlossen ist, und unlesbar gemacht.
+  printf '%s' '{"models":[]}' > "$(cachefile)"
+  chmod 000 "$(cachefile)"
+  # Ohne --refresh, damit der Lesepfad des frischen Zwischenspeichers
+  # getroffen wird -- genau die Stelle, die den Code vergab.
+  out="$("$MODELS" list --json)"
+  chmod 600 "$(cachefile)"
+  assert_eq "$(printf '%s' "$out" | jq -r '.error')" "cache-unreadable"
 }
 
 test_fehlendes_opencode_meldet_sich_im_json() {

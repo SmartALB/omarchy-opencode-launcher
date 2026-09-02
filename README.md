@@ -62,9 +62,17 @@ the panel needs it.
 
 ## Requirements
 
-- `omarchy-shell` -- this is a bar widget for it.
+- `omarchy-shell` -- this is a bar widget for it -- and `qt6-declarative`,
+  which provides the QML runtime the panel is written against. Omarchy
+  already brings both; they are named here so a stripped-down system knows
+  what is missing.
 - `opencode` itself, reachable on `PATH` (or via `OPENCODE_BIN`).
 - `jq` -- every script that produces or reads JSON uses it.
+- The launch chain, all of it part of Omarchy: `omarchy-launch-or-focus`
+  (focuses an already-open window for a project instead of starting a
+  second one), `xdg-terminal-exec` (opens your configured terminal) and
+  `uwsm-app` (starts it in its own session, so it survives the panel
+  closing). Without them a click reports the failure and starts nothing.
 - `sqlite3`, optional. Without it, the "recent projects" list is simply
   empty; pinned projects, the model picker and launching all keep working.
   `sqlite3` is only needed to read opencode's own session database for
@@ -81,17 +89,41 @@ the panel needs it.
 
 ## Files
 
-- `~/.config/omarchy/opencode-launcher.json` -- your pinned projects.
+- `~/.config/omarchy/opencode-launcher.json` -- your pinned projects. You
+  write this one yourself; see the example below.
   `~/.config/omarchy/opencode-projects.json` is read as a fallback if the
   first file does not exist, for anyone who set up pinned projects under
   the older name.
 - `${XDG_STATE_HOME:-~/.local/state}/omarchy/smartalb-opencode/` -- the
-  plugin's own state: the model remembered per project.
+  plugin's own state: the model remembered per project, and the models you
+  starred in the picker.
 - `${XDG_CACHE_HOME:-~/.cache}/omarchy/smartalb.opencode/` -- the cached
   model list fetched from opencode.
 - `~/.config/omarchy/shell.json` -- gets the widget's entry under
   `bar.layout`, added by `omarchy plugin enable` / `--enable` and removed
   again by `omarchy plugin remove`.
+
+### Pinning projects
+
+`~/.config/omarchy/opencode-launcher.json` holds one object with a
+`projects` list. Each entry needs a `path`; `name` is optional and defaults
+to the path shortened with `~`:
+
+```json
+{
+  "projects": [
+    { "name": "playwright-tests", "path": "~/git/project-e2e" },
+    { "path": "/srv/work/api" }
+  ]
+}
+```
+
+`path` may start with `~`. If the shape is wrong -- `projects` not a list,
+or an entry without a `path` -- the panel says so instead of quietly
+showing an empty list.
+
+The file is optional: without it the panel shows only the projects opencode
+was recently used in.
 
 ## How it works
 
@@ -105,6 +137,31 @@ the launch to Omarchy's own `omarchy-launch-or-focus`, which focuses an
 existing window carrying that app-id instead of starting a second one.
 `Shift+Enter` bypasses that and always starts a new window; with
 `confirmNewWindow` on, that has to be confirmed once before it opens.
+
+### Keys and clicks
+
+The panel shows a short version of this as a footer line.
+
+| Key or click | What it does |
+|---|---|
+| `Up` / `Down` | Move the selection through the project list |
+| `Enter`, left-click | Open the selected project, or focus its window if it is already open |
+| `Shift+Enter` | Always open a *second* window, even if one is running |
+| `m`, right-click, or the `⌄` chip | Open the model picker for that project |
+| `r`, middle-click on the bar icon, or the `⟳` button | Reload the project list and the model list |
+| `Esc` | Close the model picker, or the panel if no picker is open |
+
+In the model picker:
+
+| Key or click | What it does |
+|---|---|
+| type anything | Filter the list |
+| `Up` / `Down` | Move the selection |
+| `Enter`, click a row | Use that model for this project |
+| `Enter` with no matches | Use exactly what you typed as the model id |
+| `*`, or click the star | Star the selected model, so it sorts to the top |
+| the bottom row | Forget this project's model and let opencode use its own default |
+| `Esc` | Close the picker without changing anything |
 
 ## Tests
 
@@ -121,13 +178,30 @@ a real opencode installation.
 ./test/mutation.sh
 ```
 
-Runs the mutation probes and prints how many ran and how many turned at
-least one test red. Each probe removes a single safeguard from the code
-and checks that `./test/run.sh` actually turns red because of it. A green
-suite proves nothing on its own: this project's own history already has
-sixteen tests that stayed green while proving nothing about the behaviour
-they were meant to guard -- the probes exist to catch that mechanically
-instead of by review.
+**Run this one from a copy of the plugin directory, not from an installed,
+enabled plugin.** It rewrites files under `bin/`, the `.qml` files and
+`test/run.sh` in place and restores each one immediately afterwards --
+and Omarchy's plugin registry watches the plugin directory with
+`inotifywait` and reloads the shell on every change. Run in place, that is
+dozens of live bar reloads, several of them running deliberately weakened
+code. Copy the directory somewhere outside `~/.config/omarchy/plugins/`
+first (`cp -a`) and run it there.
+
+Each probe removes a single safeguard from the code and records what
+happened, with the name of the failing test and its assertion message --
+not merely that something failed. Most probes are expected to turn at
+least one test red; that is the proof a test really checks the property it
+claims. A few are expected to stay *green* on purpose, because they remove
+only one of two independent layers and the remaining layer carries alone;
+those declare their expectation themselves and verify it their own way
+rather than by running the suite. The runner prints how many probes ran,
+how many met each expectation, and how many proved nothing, and exits
+non-zero if any probe missed its expectation.
+
+A green suite proves nothing on its own. This project's own history counts
+a whole series of tests that passed while proving nothing about the
+behaviour they were meant to guard; the probes exist to catch that
+mechanically instead of by review.
 
 ## License
 

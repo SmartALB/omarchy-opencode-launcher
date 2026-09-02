@@ -21,6 +21,25 @@ test_valid_model_id_lehnt_kaputte_ids_ab() {
   ! valid_model_id "openai/a|id"        || fail "Pipe akzeptiert"
   ! valid_model_id "openai/a&&id"       || fail "Und-Verknuepfung akzeptiert"
   ! valid_model_id 'openai/`id`'        || fail "Backtick-Substitution akzeptiert"
+  # C9 (Abschluss-Review): ein Wert, der wie ein Flag aussieht, hat in
+  # diesen beiden Funktionen keinen Grund erlaubt zu sein -- auch wenn er
+  # heute immer in der Argumentposition hinter seinem eigenen Flag steht
+  # und daher nie selbst als Flag gelesen wird.
+  ! valid_model_id "--config/x"         || fail "fuehrender Bindestrich akzeptiert"
+  ! valid_model_id "-a/b"               || fail "fuehrender Bindestrich akzeptiert"
+  # Und die Gegenprobe: INNERHALB der Segmente bleibt der Bindestrich
+  # zugelassen -- echte IDs brauchen ihn.
+  valid_model_id "cloudflare-workers-ai/gpt-oss-20b" \
+    || fail "Bindestrich innerhalb der Segmente abgelehnt"
+}
+
+# C9, zweite Haelfte: derselbe Massstab fuer den Agentennamen.
+test_valid_agent_name_lehnt_fuehrenden_bindestrich_ab() {
+  . "$COMMON"
+  ! valid_agent_name "-rf"    || fail "fuehrender Bindestrich akzeptiert"
+  ! valid_agent_name "--help" || fail "fuehrender Bindestrich akzeptiert"
+  valid_agent_name "Allgemein"   || fail "gewoehnlicher Name abgelehnt"
+  valid_agent_name "plan-mode"   || fail "Bindestrich in der Mitte abgelehnt"
 }
 
 # Ruling 7: die models.dev-Katalogpruefung zeigte reale Modell-IDs mit @, :
@@ -97,7 +116,13 @@ test_read_capped_zaehlt_bytes_nicht_zeichen() {
   f="$SANDBOX/f"; printf 'ääää' > "$f"   # 8 Bytes, 4 Zeichen
   rc=0; read_capped "$f" 7 >/dev/null || rc=$?
   assert_status "$rc" 8
-  out="$(read_capped "$f" 8)"; assert_eq "$?" 0
+  # C12 (Abschluss-Review): "cmd; assert_eq \"\$?\" 0" kann unter dem
+  # echten set -e dieser Harness NIE fehlschlagen -- ein von 0
+  # verschiedener Status beendet die Testfunktion schon bei der Zuweisung,
+  # die Zusicherung laeuft dann nie. Status im selben Ausdruck einfangen.
+  rc=0; out="$(read_capped "$f" 8)" || rc=$?
+  assert_status "$rc" 0
+  assert_eq "${#out}" 8
 }
 
 test_read_capped_zaehlt_abschliessende_zeilenumbrueche_mit() {
@@ -153,7 +178,10 @@ test_read_capped_zaehlt_nul_bytes_korrekt() {
 
   head -c 8 /dev/zero > "$f"                 # genau 8 NUL-Bytes, max=8
   out_f="$SANDBOX/out.nul"
-  read_capped "$f" 8 > "$out_f"; assert_status "$?" 0
+  # C12: wie oben -- der Status muss in derselben Anweisung eingefangen
+  # werden, sonst ist die Zusicherung unter set -e unerreichbar.
+  rc=0; read_capped "$f" 8 > "$out_f" || rc=$?
+  assert_status "$rc" 0
   n="$(wc -c < "$out_f" | tr -d ' ')"
   assert_eq "$n" 8
 }
@@ -167,7 +195,9 @@ test_read_stream_capped_zaehlt_nul_bytes_korrekt() {
 
   head -c 8 /dev/zero > "$in_f"              # genau 8 NUL-Bytes, max=8
   out_f="$SANDBOX/out2.nul"
-  read_stream_capped 8 < "$in_f" > "$out_f"; assert_status "$?" 0
+  # C12: wie oben.
+  rc=0; read_stream_capped 8 < "$in_f" > "$out_f" || rc=$?
+  assert_status "$rc" 0
   n="$(wc -c < "$out_f" | tr -d ' ')"
   assert_eq "$n" 8
 }

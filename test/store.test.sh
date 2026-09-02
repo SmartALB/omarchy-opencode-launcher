@@ -39,6 +39,36 @@ test_unset_entfernt_nur_den_einen_eintrag() {
   assert_eq "$("$STORE" get /p/zwei)" "openai/b"
 }
 
+# C8 (Abschluss-Review): eine Entfernung darf die Zustandsdatei nicht erst
+# anlegen. Gemessen wurde eine 46 Byte grosse, leere Zustandsdatei nach
+# "store unset /nix" ohne vorhandenen Zustand. "Nicht vorhanden" ist bereits
+# das Ergebnis, das die Operation herstellen soll -- und alles, was danach
+# zwischen "nie benutzt" und "alles wieder entfernt" unterscheiden will,
+# unterschied falsch.
+test_unset_ohne_zustandsdatei_legt_keine_an() {
+  rc=0; "$STORE" unset /nix >/dev/null 2>&1 || rc=$?
+  assert_status "$rc" 0
+  [ ! -e "$(statefile)" ] || fail "unset hat die Zustandsdatei angelegt: $(cat "$(statefile)")"
+}
+
+test_unstar_ohne_zustandsdatei_legt_keine_an() {
+  rc=0; "$STORE" unstar openai/a >/dev/null 2>&1 || rc=$?
+  assert_status "$rc" 0
+  [ ! -e "$(statefile)" ] || fail "unstar hat die Zustandsdatei angelegt: $(cat "$(statefile)")"
+}
+
+# Gegenprobe zu den beiden oben: MIT vorhandener Zustandsdatei muessen
+# unset und unstar weiter wirken -- die Wache darf nicht zur Untaetigkeit
+# werden.
+test_unset_und_unstar_wirken_mit_vorhandener_zustandsdatei() {
+  "$STORE" set /p/eins openai/a >/dev/null
+  "$STORE" star openai/a >/dev/null
+  "$STORE" unset /p/eins >/dev/null
+  "$STORE" unstar openai/a >/dev/null
+  assert_eq "$("$STORE" get /p/eins)" ""
+  assert_not_contains "$("$STORE" stars)" "openai/a"
+}
+
 test_sterne_werden_gehalten_und_entfernt() {
   "$STORE" star openai/a >/dev/null
   "$STORE" star lmstudio/openai/b >/dev/null
@@ -50,8 +80,8 @@ test_sterne_werden_gehalten_und_entfernt() {
 # Ruling 12: die alte, einzelne Atomaritaets-Testfunktion setzte den
 # jq-Doppelgaenger auch fuer den lesenden schemaVersion-Aufruf in load()
 # ein. Dieser scheiterte dort zuerst, load() gab 9 zurueck, und weder der
-# Transform-jq in edit() (Zeile 57) noch publish() (Zeile 58) -- also weder
-# mktemp noch mv -- wurden je erreicht. Der Test war damit ein Duplikat von
+# Transform-jq in edit() noch publish() -- also weder mktemp noch mv --
+# wurden je erreicht. Der Test war damit ein Duplikat von
 # test_kaputtes_json_wird_nicht_stillschweigend_ersetzt unter anderem Namen
 # und deckte keinen der drei Fehlerpfade ab, die diese Aufgabe eigentlich
 # absichern soll. Ersetzt durch drei Tests, je einer pro Fehlerpfad.
@@ -59,15 +89,19 @@ test_sterne_werden_gehalten_und_entfernt() {
 test_set_transform_jq_schlaegt_fehl_nachdem_das_lesen_gelang() {
   "$STORE" set /p/eins openai/a >/dev/null
   before="$(cat "$(statefile)")"
+  # C11: Anker statt Zeilennummern -- die hier genannten Nummern (57/48)
+  # waren schon zwei Umbauten alt und zeigten auf fremde Zeilen. Ein Name,
+  # den man suchen kann, veraltet nicht.
+  #
   # Doppelgaenger mit Zaehler in $SANDBOX: der erste jq-Aufruf (das lesende
-  # schemaVersion-jq in load(), Zeile 30) geht unveraendert an den echten
-  # jq durch -- load() muss also gelingen. Erst der zweite Aufruf (die
-  # Transformation in edit(), Zeile 57) scheitert, und zwar nicht still:
-  # er gibt vor dem Scheitern noch etwas auf stdout aus, damit die Pruefung
-  # wirklich das "|| return 1" nach dem Transform-jq trifft und nicht
-  # zufaellig durch publish()s Leerinhalts-Waechter (Zeile 48) abgefangen
-  # wird, der nur bei WIRKLICH leerer Ausgabe greift. Ueber JQ_BIN, nicht
-  # ueber den PATH -- das Skript ruft jq absolut auf.
+  # schemaVersion-jq in load()) geht unveraendert an den echten jq durch --
+  # load() muss also gelingen. Erst der zweite Aufruf (der Transform-jq in
+  # edit()) scheitert, und zwar nicht still: er gibt vor dem Scheitern noch
+  # etwas auf stdout aus, damit die Pruefung wirklich das "|| return 1"
+  # nach dem Transform-jq trifft und nicht zufaellig durch publish()s
+  # Leerinhalts-Waechter abgefangen wird, der nur bei WIRKLICH leerer
+  # Ausgabe greift. Ueber JQ_BIN, nicht ueber den PATH -- das Skript ruft
+  # jq absolut auf.
   cat > "$SANDBOX/stub/jq" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$SANDBOX/log/jq.log"
@@ -101,10 +135,13 @@ STUB
 test_set_transform_jq_liefert_leere_ausgabe() {
   "$STORE" set /p/eins openai/a >/dev/null
   before="$(cat "$(statefile)")"
+  # C11: Anker statt Zeilennummer (stand hier als "Zeile 48").
+  #
   # Doppelgaenger: der erste Aufruf (Lesen) geht durch, der zweite
   # (Transformation) meldet Erfolg (Exit 0), liefert aber nichts auf
-  # stdout. publish()s eigener Leerinhalts-Waechter (Zeile 48) muss das
-  # auffangen, sonst wuerde die alte Datei durch eine leere ersetzt.
+  # stdout. publish()s eigener Leerinhalts-Waechter ("[ ! -s "$tmp" ]")
+  # muss das auffangen, sonst wuerde die alte Datei durch eine leere
+  # ersetzt.
   cat > "$SANDBOX/stub/jq" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$SANDBOX/log/jq.log"

@@ -397,7 +397,12 @@ probe_gruen_manuell() {
   fi
 }
 
-# --- Die zehn Proben aus dem Task-Brief -------------------------------------
+# --- Die Proben ------------------------------------------------------------
+#
+# C11: hier stand "Die zehn Proben aus dem Task-Brief". Zehn waren es beim
+# ersten Entwurf; es sind vierzehn, und die Zahl wird sich wieder aendern.
+# Der Runner zaehlt sie selbst und gibt die Bilanz am Ende aus -- eine Zahl
+# in einem Kommentar veraltet nur.
 
 probe "Modell-ID-Pruefung entfernt" bin/_common.sh \
   '/^valid_model_id() {/,/^}/ s/return 1/return 0/g'

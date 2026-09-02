@@ -78,6 +78,18 @@ case "$cmd" in
     ;;
   unset)
     [ $# -eq 2 ] || usage
+    # C8 (Abschluss-Review): eine Entfernung darf die Zustandsdatei nicht
+    # erst ANLEGEN. Ohne diese Wache legte "store unset /nix" ohne
+    # vorhandenen Zustand eine 46 Byte grosse, leere Datei an -- gemessen.
+    # Sie enthaelt nichts, aber sie existiert danach, und alles, was
+    # zwischen "nie benutzt" und "alles wieder entfernt" unterscheidet,
+    # unterscheidet danach falsch. "Nicht vorhanden" ist bereits das
+    # Ergebnis, das diese Operation herstellen soll, also ist sie fertig.
+    #
+    # "-e", nicht "-f": liegt am Pfad etwas anderes (Symlink, Verzeichnis),
+    # geht der Aufruf weiter in load() und wird dort mit Exit 6 richtig
+    # gemeldet, statt hier stillschweigend als Erfolg zu enden.
+    [ -e "$STATE" ] || exit 0
     edit 'del(.projects[$p])' --arg p "$2" || exit $?
     ;;
   star)
@@ -87,6 +99,8 @@ case "$cmd" in
     ;;
   unstar)
     [ $# -eq 2 ] || usage
+    # C8, dieselbe Begruendung wie bei "unset" oben.
+    [ -e "$STATE" ] || exit 0
     edit '.starred = ((.starred // []) - [$m])' --arg m "$2" || exit $?
     ;;
   stars)

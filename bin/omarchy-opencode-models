@@ -90,7 +90,19 @@ if [ "$refresh" = false ] && cache_fresh; then
     emit_error "cache-not-a-file"
     exit 0
   fi
-  read_capped "$CACHE" "$MAX_FILE" || { emit_error "cache-too-large"; exit 0; }
+  # C4: read_capped gibt 8 fuer "ueber der Grenze" und 1 fuer alles andere
+  # (nicht lesbar, head gescheitert) zurueck. Beides zu "cache-too-large"
+  # zusammenzufassen war eine Falschmeldung, gemessen an einer 13 Byte
+  # grossen Datei mit chmod 000: sie kam als "zu gross" an. Wer eine
+  # Berechtigung repariert, statt Platz zu schaffen, braucht den richtigen
+  # Satz.
+  rc=0
+  read_capped "$CACHE" "$MAX_FILE" || rc=$?
+  if [ "$rc" = 8 ]; then
+    emit_error "cache-too-large"; exit 0
+  elif [ "$rc" != 0 ]; then
+    emit_error "cache-unreadable"; exit 0
+  fi
   echo
   exit 0
 fi
@@ -129,6 +141,25 @@ if [ "$count" -gt "$MAX_MODELS" ]; then
 fi
 
 out="$(printf '%s\n' "$ids" | emit "opencode" false "$capped")"
+
+# C1: einen LEEREN Katalog nie zwischenspeichern. Ein einziger schlechter
+# "opencode models"-Lauf -- ein Erstlauf-Banner statt einer Liste, kein
+# konfigurierter Provider, ein Anbieter, der gerade nichts liefert --
+# endete hier bisher als leere, aber FRISCHE Cache-Datei: cache_fresh()
+# stimmte dann fuer die naechsten catalogRefreshHours (Standard 24 h) zu,
+# und der Picker blieb so lange leer, obwohl der naechste Aufruf wieder
+# funktioniert haette. Ein vorhandener, alter Cache mit echtem Inhalt ist
+# in jedem Fall besser als ein frischer, leerer.
+#
+# "Fuer diesen Aufruf melden, aber nicht ablegen": das leere Ergebnis geht
+# unveraendert auf stdout (es ist ja das, was opencode gerade gesagt hat),
+# nur der Cache bleibt unberuehrt -- der naechste Aufruf fragt deshalb
+# wieder wirklich nach.
+if [ "$count" -eq 0 ]; then
+  printf '%s\n' "$out"
+  exit 0
+fi
+
 mkdir -p "$CACHE_DIR"
 # Ruling 19: dieselbe Pruefung auch vor dem Schreiben -- sonst wuerde ein
 # Symlink am Cache-Pfad hier stillschweigend durch "mv -f" ersetzt statt

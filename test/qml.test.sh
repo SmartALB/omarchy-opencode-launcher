@@ -107,11 +107,22 @@ test_abbau_deckt_jeden_erklaerten_prozess() {
 test_zahlenwerte_aus_einstellungen_sind_begrenzt() {
   # Ein Wert aus shell.json wandert in eine Kommandozeile. Er darf nur als
   # eingeschraenkte Zahl dorthin gelangen, nie als Zeichenkette.
-  out="$(grep -A2 'readonly property int recentCount' "$ROOT/Panel.qml")"
-  assert_contains "$out" "Math.max"
-  assert_contains "$out" "Math.min"
-  out="$(grep -A2 'readonly property int refreshHours' "$ROOT/Panel.qml")"
-  assert_contains "$out" "Math.min"
+  #
+  # C12 (Abschluss-Review): die alte Fassung suchte nur nach den
+  # ZEICHENKETTEN "Math.max"/"Math.min" -- eine reine Anwesenheitsregel.
+  # Der Reviewer hat die Obergrenze auf 99999999 aufgeweitet und die Regel
+  # blieb gruen: sie sah, DASS geklammert wird, nie WORAUF. Und refreshHours
+  # war nur halb so streng geprueft wie recentCount ("Math.min" ja,
+  # "Math.max" nein). Jetzt zaehlen beide Grenzen woertlich, fuer beide
+  # Werte.
+  #
+  # Leerraum wird vorher entfernt, damit eine Umformatierung (Zeilenumbruch
+  # hinter "Math.max(") die Regel nicht aus einem Grund rot macht, der
+  # nichts mit der Grenze zu tun hat.
+  out="$(grep -A2 'readonly property int recentCount' "$ROOT/Panel.qml" | tr -d ' \n')"
+  assert_contains "$out" "Math.max(0,Math.min(50,"
+  out="$(grep -A2 'readonly property int refreshHours' "$ROOT/Panel.qml" | tr -d ' \n')"
+  assert_contains "$out" "Math.max(0,Math.min(720,"
 }
 
 test_mausrad_ist_unbelegt() {

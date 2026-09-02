@@ -84,24 +84,43 @@ plugin state. It prints its own pass/fail tally at the end; that count is
 not repeated here, since it changes with every added test and a
 hard-coded number in prose would just as reliably go stale.
 
-A green suite is not proof on its own. This project's own history already
-counts sixteen tests that passed while proving nothing about the behaviour
-they were meant to guard -- checking for the wrong thing, or for something
-that happened to be true regardless of whether the actual protection was
-in place. Each looked like coverage on a report while catching nothing,
-and each was found only by closer review, not by the suite failing.
+A green suite is not proof on its own. This project's own history counts a
+whole series of tests -- found one at a time, over many review rounds --
+that passed while proving nothing about the behaviour they were meant to
+guard: checking for the wrong thing, or for something that happened to be
+true regardless of whether the actual protection was in place. Each looked
+like coverage on a report while catching nothing, and each was found only
+by closer review, not by the suite failing. The count is deliberately not
+written down here; it has grown with every round and a number in prose
+would go stale the way the test count would.
 
 `./test/mutation.sh` exists to catch that class of failure mechanically
 rather than by review. Each probe removes exactly one safeguard from the
-code -- a validation check, a timeout, a symlink guard -- and then runs
-the full suite, expecting at least one test to turn red *because of that
-specific change*. The probe records which test failed and with what
-message, not just that something failed: a passing suite whose failure
-comes from an unrelated cause (a missing tool in a narrow test `PATH`,
-say) would look identical to a real catch without that detail. A probe
-whose safeguard is removed but every test stays green means exactly what
-the sixteen-tests history above illustrates: the tests exist, but nothing
-in them would notice if that protection disappeared. The runner prints
-how many probes ran and how many of them actually turned a test red, for
-the same reason `./test/run.sh` prints its own tally rather than being
-quoted here.
+code -- a validation check, a timeout, a symlink guard -- and records what
+happened, naming the test that failed and its assertion message rather
+than just reporting that something failed: a failure from an unrelated
+cause (a missing tool in a narrow test `PATH`, say) would otherwise look
+identical to a real catch.
+
+Most probes then run the full suite and expect at least one test to turn
+red *because of that specific change*. Not all of them: where two
+independent layers guard the same property, removing one leaves the other
+carrying alone, and the honest expectation is that the suite stays
+**green**. Such a probe declares that expectation itself and verifies the
+weaker property it actually means directly, without the suite -- because
+the suite also asserts the stronger contract of the layer that was
+removed, and would go red for the right reason but the wrong claim. A
+probe that misses its own expectation, in either direction, is a finding:
+either the tests do not check what they claim, or one of two layers does
+not carry alone after all.
+
+The runner prints how many probes ran, how many met each expectation, and
+how many proved nothing, and exits non-zero unless every probe met its
+expectation -- for the same reason `./test/run.sh` prints its own tally
+rather than being quoted here.
+
+Because the probes rewrite the plugin's own files in place, they must be
+run from a copy: Omarchy's plugin registry watches an installed plugin
+directory with `inotifywait` and reloads the shell on every change, so a
+run in place means dozens of live bar reloads, some of them running
+deliberately weakened code. `README.md` says so at the invocation.

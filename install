@@ -11,9 +11,40 @@ if [ "$(id -u)" = "0" ]; then
   exit 1
 fi
 
+# C5: eine ausdrueckliche Liste statt "cp -a $SRC/. $DEST/". Ein manuelles
+# "./install" aus einem Klon kopierte sonst ".git" (die ganze Historie),
+# ".superpowers" (die Arbeitsakte dieses Projekts) und "docs/superpowers"
+# (Plan und Spezifikation) in die Konfiguration eines Fremden -- alles
+# Internes, das dort nichts zu suchen hat. Eine Liste ist auch der
+# richtige Weg herum: was neu dazukommt, muss aufgenommen werden, statt
+# dass jedes neue interne Verzeichnis erst als Ausschluss nachgetragen
+# werden muss.
+CONTENT=(
+  bin test images
+  Panel.qml ModelSheet.qml manifest.json
+  README.md CHANGELOG.md LICENSE install uninstall
+)
+# docs enthaelt EINE interne Ecke (docs/superpowers), also Datei fuer Datei.
+DOCS=(docs/design.md docs/einreichung.md)
+
 if [ "$SRC" != "$DEST" ]; then
   mkdir -p "$DEST"
-  cp -a "$SRC"/. "$DEST"/
+  for item in "${CONTENT[@]}"; do
+    [ -e "$SRC/$item" ] || continue
+    if [ -d "$SRC/$item" ]; then
+      # "$SRC/$item/." statt "$SRC/$item": ohne den Punkt landet ein
+      # Verzeichnis, das im Ziel bereits existiert, als "$DEST/bin/bin"
+      # darin statt darueber.
+      mkdir -p "$DEST/$item"
+      cp -a "$SRC/$item"/. "$DEST/$item"/
+    else
+      cp -a "$SRC/$item" "$DEST/$item"
+    fi
+  done
+  mkdir -p "$DEST/docs"
+  for item in "${DOCS[@]}"; do
+    [ -e "$SRC/$item" ] && cp -a "$SRC/$item" "$DEST/$item"
+  done
 fi
 
 chmod +x "$DEST"/bin/* "$DEST"/test/run.sh
