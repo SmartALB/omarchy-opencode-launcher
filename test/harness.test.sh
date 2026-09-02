@@ -74,4 +74,44 @@ test_fail_aufruf_wird_weiterhin_als_fail_gemeldet() {
   [ "$rc" -ne 0 ] || fail "erwartet: von 0 verschiedener Exit-Status" "erhalten: 0"
 }
 
+# Ruling 18: test/run.sh selbst durfte einen echten, vollstaendig
+# durchgelaufenen Fehlschlag nicht laenger als "SUITE-FEHLER" (Absturz vor
+# run_tests) melden -- ab etwa fuenfzig weiteren Tests in den Aufgaben 4-8
+# haette eine solche Fehletikettierung bei jedem roten Lauf Suchzeit
+# gekostet. Dieser Test prueft die tatsaechliche Ausgabe des echten
+# test/run.sh (kopiert in ein Wegwerf-Projektverzeichnis, nicht
+# nachgebaut) mit zwei Wegwerf-Suiten: eine mit einem echten, ueber
+# "fail" gemeldeten Fehlschlag, eine mit einem Syntaxfehler, der schon vor
+# run_tests abbricht. Beide muessen den Gesamtlauf scheitern lassen, aber
+# nur die zweite darf als SUITE-FEHLER benannt werden.
+test_echter_fehlschlag_wird_nicht_als_suite_absturz_gemeldet_waehrend_ein_echter_absturz_es_bleibt() {
+  proj="$SANDBOX/proj"
+  mkdir -p "$proj/test/lib"
+  cp "$DIR/run.sh" "$proj/test/run.sh"
+  cp "$HARNESS" "$proj/test/lib/harness.sh"
+
+  cat > "$proj/test/a_echter_fehlschlag.test.sh" <<'SUITE_A'
+#!/usr/bin/env bash
+set -uo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/lib/harness.sh"
+test_a() {
+  assert_eq "x" "y"
+}
+run_tests
+SUITE_A
+
+  cat > "$proj/test/b_echter_absturz.test.sh" <<'SUITE_B'
+#!/usr/bin/env bash
+diese Zeile ist kein gueltiges Bash (((
+SUITE_B
+
+  rc=0; out="$(bash "$proj/test/run.sh" 2>&1)" || rc=$?
+  [ "$rc" -ne 0 ] || fail "erwartet: von 0 verschiedener Exit-Status" "erhalten: 0"
+  assert_contains "$out" "FAIL test_a"
+  assert_contains "$out" "SUITE-FEHLER"
+  assert_contains "$out" "b_echter_absturz.test.sh"
+  assert_not_contains "$out" "a_echter_fehlschlag.test.sh (Exit"
+}
+
 run_tests

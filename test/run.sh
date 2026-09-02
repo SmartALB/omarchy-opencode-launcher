@@ -28,9 +28,19 @@ for suite in test/*.test.sh; do
   # shellcheck disable=SC1090
   out="$(bash "$suite")"; suite_status=$?
   printf '%s\n' "$out"
+  suite_fail="$(printf '%s' "$out" | grep -c '^  FAIL' || true)"
   total_pass=$((total_pass + $(printf '%s' "$out" | grep -c '^  ok  ' || true)))
-  total_fail=$((total_fail + $(printf '%s' "$out" | grep -c '^  FAIL' || true)))
-  if [ "$suite_status" -ne 0 ]; then
+  total_fail=$((total_fail + suite_fail))
+  # Ruling 18: eine Suite, die vollstaendig durchlief und dabei echte FAILs
+  # meldete, ist kein Absturz -- nur eine Suite, die VOR run_tests abbricht
+  # (Syntaxfehler, fehlende Quelle) liefert weder "ok" noch "FAIL" und
+  # trotzdem einen von 0 verschiedenen Exit-Status. Deshalb beides pruefen:
+  # von 0 verschiedener Exit UND keine einzige gezaehlte FAIL-Zeile. Sonst
+  # wuerde jede Suite mit mindestens einem echten Fehlschlag (run_tests gibt
+  # seit Ruling 15 selbst [ "$FAIL" -eq 0 ] zurueck) hier zusaetzlich als
+  # Absturz gemeldet, obwohl sie sauber durchlief und der Fehlschlag schon
+  # ueber total_fail gezaehlt wird.
+  if [ "$suite_status" -ne 0 ] && [ "$suite_fail" -eq 0 ]; then
     suite_errors+=("$(basename "$suite") (Exit $suite_status)")
   fi
 done
