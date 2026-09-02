@@ -41,6 +41,28 @@ tilde_abbrev() {
   esac
 }
 
+# Kanonische Form eines Projektverzeichnisses -- die EINZIGE Stelle, an der
+# das passiert.
+#
+# A1: die App-Id haengt am Pfad-TEXT (siehe app_id_for unten). "." und
+# "/abs/proj", "/abs/proj" und "/abs/proj/", ein Pfad durch einen Symlink
+# und sein Ziel sind derselbe Ordner, aber verschiedene Texte -- und damit
+# verschiedene App-Ids. omarchy-opencode-launch kanonisierte deshalb schon
+# immer, omarchy-opencode-projects nicht: die Laufanzeige des Panels und
+# das Bar-Label "Running count" lagen fuer jedes so angeheftete Projekt
+# dauerhaft falsch, weil die beiden Skripte zwei verschiedene App-Ids fuer
+# dasselbe Fenster errechneten. Zwei Kopien derselben Formel laufen
+# auseinander; eine Funktion kann das nicht.
+#
+# Rueckfall auf den rohen Pfad, wenn "cd" scheitert (Verzeichnis geloescht,
+# keine Rechte): dann ist die App-Id zwar nicht kanonisch, aber in beiden
+# Skripten gleich -- und genau darauf kommt es an.
+canon_dir() {
+  local d
+  d="$(cd "$1" && pwd -P)" || d="$1"
+  printf '%s\n' "$d"
+}
+
 # Fensterklasse fuer ein Projektverzeichnis. Der Hash ist noetig, weil zwei
 # Projekte mit je einem Unterordner "web" sonst dieselbe Klasse erzeugen und
 # ein Klick das falsche Fenster fokussiert.

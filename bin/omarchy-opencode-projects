@@ -40,6 +40,35 @@ if [ -n "$cfg_file" ]; then
     die_json "config-unreadable" 9
   }
   printf '%s' "$raw" | "$BIN_JQ" -e . >/dev/null 2>&1 || die_json "config-unreadable" 9
+  # A3 (Abschluss-Review): gueltiges JSON reicht nicht. Der letzte
+  # jq-Aufruf unten liest ".projects[] | .path" -- eine falsche FORM
+  # scheiterte dort still (das "|| true" hinter dem pinned_tsv-jq) und
+  # ergab eine LEERE Liste mit Exit 0, also genau dasselbe Bild wie "noch
+  # nichts angeheftet". Gemessen hat der Reviewer zwei natuerliche
+  # Fehlformen, die beide so aussahen: "{"projects":{"Demo":"~/git/demo"}}"
+  # (Objekt statt Array) und "[{"name":…}]" (blankes Array ohne
+  # "projects"-Schluessel).
+  #
+  # Derselbe Massstab wie am Zustandspfad weiter unten, der vier eigene
+  # Fehlercodes hat: ".projects" muss ein Array sein, und jeder Eintrag ein
+  # Objekt mit einem nichtleeren String ".path". Ein GANZ fehlendes
+  # ".projects" bleibt gueltig ("{}" ist eine leere, aber richtige Config).
+  # Als Ganzruf-Fehler wie state-invalid, nicht als Feld je Zeile: eine
+  # halb gelesene Liste waere schlimmer als eine gemeldete.
+  #
+  # "if type != object" zuerst, weil ".projects" auf einem Array oder einem
+  # String selbst mit einem jq-Fehler abbricht; ".path?" statt ".path" aus
+  # demselben Grund innerhalb der Eintragspruefung.
+  cfg_ok="$(printf '%s' "$raw" | "$BIN_JQ" -r '
+    if type != "object" then false
+    else
+      ((.projects // []) | type == "array")
+      and ([(.projects // [])[]
+             | (type == "object")
+               and (((.path?) // null) as $q
+                    | ($q | type) == "string" and ($q | length) > 0)] | all)
+    end' 2>/dev/null)"
+  [ "$cfg_ok" = "true" ] || die_json "config-invalid" 9
   cfg="$raw"
 fi
 
@@ -209,9 +238,15 @@ fi
   i=0
   while [ "$i" -lt "${#PATHS[@]}" ]; do
     exists=false; [ -d "${PATHS[$i]}" ] && exists=true
+    # A1: canon_dir VOR app_id_for -- genau wie in
+    # omarchy-opencode-launch, und aus derselben Funktion. Ohne das
+    # errechnete dieses Skript fuer einen angehefteten Pfad mit
+    # Symlink-Anteil oder abschliessendem Schraegstrich eine ANDERE App-Id
+    # als der Start, und "running" (Punkt in der Zeile) sowie das
+    # Bar-Label "Running count" logen fuer dieses Projekt dauerhaft.
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
       "${NAMES[$i]}" "${PATHS[$i]}" "$(tilde_abbrev "${PATHS[$i]}")" \
-      "$(app_id_for "${PATHS[$i]}")" "${PINNED[$i]}" "$exists"
+      "$(app_id_for "$(canon_dir "${PATHS[$i]}")")" "${PINNED[$i]}" "$exists"
     i=$((i + 1))
   done
 } | "$BIN_JQ" -R -s --argjson state "$state" --argjson known "$known" \

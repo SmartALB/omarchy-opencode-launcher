@@ -42,10 +42,13 @@ fi
 # am Pfad-Text selbst -- "." und "/abs/proj" ergeben zwei verschiedene
 # App-Ids fuer dasselbe Projekt, und Fokussieren oeffnet dann still ein
 # zweites Fenster statt das erste zu finden. Deshalb nur fuer die App-Id
-# kanonisieren (cd + pwd -P); der Pfad, der unten an --dir uebergeben wird,
-# bleibt wie eingegeben -- das betrifft Anzeige/Funktion, nicht Identitaet.
-canon_dir="$(cd "$dir" && pwd -P)" || canon_dir="$dir"
-app_id="$(app_id_for "$canon_dir")"
+# kanonisieren; der Pfad, der unten an --dir uebergeben wird, bleibt wie
+# eingegeben -- das betrifft Anzeige/Funktion, nicht Identitaet.
+#
+# A1: die Formel selbst steht jetzt als canon_dir() in _common.sh, weil
+# omarchy-opencode-projects dieselbe braucht und die beiden Kopien
+# auseinandergelaufen sind.
+app_id="$(app_id_for "$(canon_dir "$dir")")"
 
 # omarchy-launch-or-focus fuehrt sein zweites Argument per eval aus. Jeder
 # eingesetzte Wert muss daher durch printf %q -- ein Projektpfad mit

@@ -22,10 +22,18 @@ REAL_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/smartalb.opencode"
 # Meldung zu ignorieren. $REAL_STATE und $REAL_CACHE bleiben Verzeichnis-
 # Sweeps, weil diese beiden Verzeichnisse ausschliesslich diesem Plugin
 # gehoeren -- eine Datei dort ist immer ein echtes Leck.
+#
+# A2 (Abschluss-Review): "$HOME/.config/opencode/opencode.json" ist neu in
+# dieser Liste. Nichts in diesem Projekt schreibt dort legitim -- das ist
+# die Kernzusage des Plugins --, deshalb kann dieser Eintrag anders als ein
+# Verzeichnis-Sweep nie falsch-positiv werden: eine Beruehrung waere immer
+# ein echtes Leck, und zwar genau das, dessen Nicht-Eintreten
+# test/promise.test.sh verhaltensmaessig zusichert.
 REAL_CFG_FILES=(
   "$HOME/.config/omarchy/opencode-launcher.json"
   "$HOME/.config/omarchy/opencode-projects.json"
   "$HOME/.config/omarchy/shell.json"
+  "$HOME/.config/opencode/opencode.json"
 )
 
 # Eine Markerdatei statt eines Zeitfensters: "-newermt '-1 second'" erwischt

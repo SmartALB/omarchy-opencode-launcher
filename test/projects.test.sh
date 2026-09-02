@@ -117,6 +117,36 @@ test_laufendes_fenster_wird_erkannt() {
   assert_eq "$("$PROJ" list --json | jq -r '.[0].running')" "true"
 }
 
+# A1 (Abschluss-Review): bin/omarchy-opencode-launch kanonisierte den Pfad
+# vor app_id_for, bin/omarchy-opencode-projects nicht -- ein angehefteter
+# Pfad mit Symlink-Anteil oder abschliessendem Schraegstrich ergab damit in
+# den beiden Skripten ZWEI verschiedene App-Ids fuer dasselbe Fenster. Die
+# Folge war keine Fehlfunktion beim Start (der laeuft ueber die App-Id von
+# launch), sondern eine dauerhaft falsche Laufanzeige: hyprctl meldet die
+# KANONISCHE Klasse, projects vergleicht sie mit der rohen -- "running"
+# blieb false, solange das Projekt so eingetragen war.
+#
+# Der hyprctl-Doppelgaenger meldet deshalb hier bewusst die App-Id des
+# KANONISCHEN Pfades (das tut das echte Fenster auch, weil launch sie so
+# setzt), und beide Zeilen -- durch einen Symlink und mit abschliessendem
+# Schraegstrich eingetragen -- muessen sie treffen.
+test_app_id_wird_auch_in_projects_kanonisiert() {
+  setup_common
+  mkdir -p "$SANDBOX/echt/proj"
+  ln -s "$SANDBOX/echt" "$SANDBOX/link"
+  write_config "{\"projects\":[{\"name\":\"UeberSymlink\",\"path\":\"$SANDBOX/link/proj\"},{\"name\":\"MitSchraegstrich\",\"path\":\"$SANDBOX/echt/proj/\"}]}"
+  . "$DIR/../bin/_common.sh"
+  canon="$(cd "$SANDBOX/echt/proj" && pwd -P)"
+  id="$(app_id_for "$canon")"
+  make_stub hyprctl "printf '%s' '[{\"class\":\"$id\"}]'"
+  export HYPRCTL_BIN="$SANDBOX/stub/hyprctl"
+  out="$("$PROJ" list --json)"
+  assert_eq "$(printf '%s' "$out" | jq -r '.[0].appId')" "$id"
+  assert_eq "$(printf '%s' "$out" | jq -r '.[0].running')" "true"
+  assert_eq "$(printf '%s' "$out" | jq -r '.[1].appId')" "$id"
+  assert_eq "$(printf '%s' "$out" | jq -r '.[1].running')" "true"
+}
+
 test_kappung_wird_gemeldet_nicht_stillschweigend_vorgenommen() {
   setup_common
   {
@@ -191,6 +221,54 @@ test_kaputte_config_liefert_gueltiges_json_und_meldet_es() {
   out="$("$PROJ" list --json)" || rc=$?
   assert_eq "$(printf '%s' "$out" | jq -r '.error')" "config-unreadable"
   assert_status "$rc" 9
+}
+
+# A3 (Abschluss-Review): eine Config in der falschen FORM sah bisher aus
+# wie "noch nichts angeheftet" -- leere Liste, Exit 0. Tabellengetrieben aus
+# demselben Grund wie beim Zustand (Ruling 28 c): eine neue Fehlform ist ab
+# jetzt eine neue Zeile, kein neuer Testname. Je Zeile durch Tabs getrennt:
+# Config-Inhalt, erwarteter .error-Wert, erwarteter Exit-Code.
+test_kaputte_config_formen_melden_config_invalid() {
+  setup_common
+  mkdir -p "$SANDBOX/a"
+  local cases=(
+    # Die zwei vom Reviewer gemessenen, natuerlichen Fehlformen.
+    $'{"projects":{"Demo":"~/git/demo"}}\tconfig-invalid\t9'
+    $'[{"name":"A","path":"/x"}]\tconfig-invalid\t9'
+    # Wurzel ist ueberhaupt kein Objekt.
+    $'"blosser string"\tconfig-invalid\t9'
+    # Eintrag ohne "path".
+    $'{"projects":[{"name":"A"}]}\tconfig-invalid\t9'
+    # Eintrag, dessen "path" kein String ist.
+    $'{"projects":[{"name":"A","path":42}]}\tconfig-invalid\t9'
+    # Eintrag ohne Objektform.
+    $'{"projects":["nur ein string"]}\tconfig-invalid\t9'
+    # Und die Gegenprobe: eine leere, aber richtige Config bleibt gueltig.
+    # "-" statt eines leeren Feldes: Tabulator ist ein IFS-Leerraumzeichen,
+    # zwei aufeinanderfolgende Tabs fasst "read" also zu EINEM Trenner
+    # zusammen -- ein leeres Feld in der Mitte kaeme nie an, und die
+    # Spalten verschoeben sich stillschweigend um eins.
+    $'{}\t-\t0'
+    $'{"projects":[]}\t-\t0'
+  )
+  local case_line content expected_error expected_exit out rc
+  for case_line in "${cases[@]}"; do
+    IFS=$'\t' read -r content expected_error expected_exit <<< "$case_line"
+    write_config "$content"
+    rc=0
+    out="$("$PROJ" list --json)" || rc=$?
+    printf '%s' "$out" | jq -e . >/dev/null 2>&1 \
+      || fail "Zeile [$content]: stdout ist kein gueltiges JSON: $out"
+    if [ "$expected_error" != "-" ]; then
+      assert_eq "$(printf '%s' "$out" | jq -r '.error // "FEHLT"')" "$expected_error"
+    else
+      # Gueltig heisst: ein Array, kein Fehlerobjekt -- und leer, weil
+      # diese beiden Faelle nichts anheften.
+      assert_eq "$(printf '%s' "$out" | jq -r 'if type == "array" then "array" else "other" end')" "array"
+      assert_eq "$(printf '%s' "$out" | jq -r 'length')" "0"
+    fi
+    assert_status "$rc" "$expected_exit"
+  done
 }
 
 test_fehlendes_sqlite3_ueberspringt_den_unterprozess_ganz() {
