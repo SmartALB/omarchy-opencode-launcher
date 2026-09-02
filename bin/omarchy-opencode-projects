@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# Projektliste fuer das Panel: gepinnte Projekte aus der Config, danach
+# Recents aus opencodes Datenbank.
+#
+# Die Recents kommen direkt aus der DB, nicht aus `opencode session list`:
+# die CLI filtert nach dem Projekt des Arbeitsverzeichnisses, und dieses
+# Skript laeuft mit dem cwd der Shell -- die Ergebnisse waeren zufaellig.
+#
+# Ein einziger jq-Aufruf baut das JSON, und ein einziger hyprctl-Aufruf
+# klaert den Laufzustand. Ein Unterprozess je Projekt waere die Laufzeit
+# "Projekte x Aufruf" ueber eine Liste, die der Benutzer schreibt.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/_common.sh"
+
+ME="$(basename "$0")"
+CFG_NEW="$HOME/.config/omarchy/opencode-launcher.json"
+CFG_OLD="$HOME/.config/omarchy/opencode-projects.json"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/smartalb-opencode/projects.json"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/smartalb.opencode/models.json"
+DB="${OPENCODE_DB:-$HOME/.local/share/opencode/opencode.db}"
+RECENTS="${OC_RECENT_COUNT:-5}"
+MAX_PROJECTS="${OC_MAX_PROJECTS:-200}"
+
+[ "${1:-}" = "list" ] && [ "${2:-}" = "--json" ] || {
+  echo "Usage: $ME list --json" >&2; exit 1; }
+
+die_json() { "$BIN_JQ" -nc --arg e "$1" '{error:$e}'; exit "$2"; }
+
+OPENCODE="${OPENCODE_BIN:-$(command -v opencode 2>/dev/null || true)}"
+[ -n "$OPENCODE" ] && [ -x "$OPENCODE" ] || die_json "opencode-missing" 3
+
+# --- Config lesen ------------------------------------------------------------
+cfg='{"projects":[]}'
+cfg_file=""
+[ -f "$CFG_NEW" ] && cfg_file="$CFG_NEW"
+[ -z "$cfg_file" ] && [ -f "$CFG_OLD" ] && cfg_file="$CFG_OLD"
+if [ -n "$cfg_file" ]; then
+  raw="$(read_capped "$cfg_file" "$MAX_FILE")" || {
+    [ "$?" = 8 ] && die_json "config-too-large" 8
+    die_json "config-unreadable" 9
+  }
+  printf '%s' "$raw" | "$BIN_JQ" -e . >/dev/null 2>&1 || die_json "config-unreadable" 9
+  cfg="$raw"
+fi
+
+# --- Zustand und Modell-Cache lesen (nur lesend) -----------------------------
+# Ruling 19: dieselbe Symlink-/Datei-Art-Pruefung wie bei Task 2 (Zustand)
+# und Task 3 (Modell-Cache) -- ein Symlink an einem der beiden Pfade wuerde
+# sonst stillschweigend verfolgt, und "absent" und "hier liegt ein Symlink"
+# sind zwei verschiedene Tatsachen. Anders als beim Modell-Cache (Task 3),
+# der bei ungueltigem Cache noch eine leere, aber sinnvolle Antwort liefern
+# kann, waere ein still auf {} zurueckfallender Zustand hier falsch: das
+# Panel wuerde "kein Modell gemerkt" von "hier hat jemand einen Symlink
+# hingelegt" nicht unterscheiden koennen. Deshalb bricht der ganze Aufruf
+# ab, mit Exit 6 ("Datei ist keine einfache Datei") und derselben Fehlerform
+# wie config-unreadable & Co.
+not_a_file() {  # not_a_file <pfad>
+  [ -L "$1" ] && return 0
+  [ -e "$1" ] && [ ! -f "$1" ] && return 0
+  return 1
+}
+not_a_file "$STATE" && die_json "state-not-a-file" 6
+not_a_file "$CACHE" && die_json "cache-not-a-file" 6
+
+state='{"projects":{}}'
+if [ -f "$STATE" ]; then
+  s="$(read_capped "$STATE" "$MAX_FILE")" && printf '%s' "$s" | "$BIN_JQ" -e . >/dev/null 2>&1 \
+    && state="$s"
+fi
+
+known='[]'
+if [ -f "$CACHE" ]; then
+  c="$(read_capped "$CACHE" "$MAX_FILE")" \
+    && known="$(printf '%s' "$c" | "$BIN_JQ" -c '[(.models // [])[].id]' 2>/dev/null || echo '[]')"
+fi
+
+# --- Pfade sammeln: gepinnt, dann Recents, gekappt VOR allem Weiteren --------
+pinned_tsv="$(printf '%s' "$cfg" | "$BIN_JQ" -r '
+  (.projects // [])[] | [(.name // ""), (.path // "")] | @tsv' 2>/dev/null || true)"
+
+declare -a PATHS=() NAMES=() PINNED=()
+CAPPED=false
+add() {
+  [ "${#PATHS[@]}" -lt "$MAX_PROJECTS" ] || { CAPPED=true; return 1; }
+  PATHS+=("$1"); NAMES+=("$2"); PINNED+=("$3")
+}
+
+while IFS=$'\t' read -r name rawpath; do
+  [ -n "$rawpath" ] || continue
+  p="$(expand_path "$rawpath")"
+  [ -n "$name" ] || name="$(tilde_abbrev "$p")"
+  add "$p" "$name" true || break
+done <<< "$pinned_tsv"
+
+if [ "$RECENTS" -gt 0 ] && [ -f "$DB" ] && command -v "$BIN_SQLITE" >/dev/null 2>&1; then
+  added=0
+  while IFS= read -r rpath; do
+    [ -n "$rpath" ] || continue
+    dup=false
+    for q in ${PATHS+"${PATHS[@]}"}; do [ "$q" = "$rpath" ] && { dup=true; break; }; done
+    [ "$dup" = true ] && continue
+    add "$rpath" "$(tilde_abbrev "$rpath")" false || break
+    added=$((added + 1)); [ "$added" -ge "$RECENTS" ] && break
+  done < <("$BIN_TIMEOUT" 5 "$BIN_SQLITE" "$DB" ".timeout 3000" "
+      SELECT directory FROM session
+      WHERE directory IS NOT NULL AND directory != ''
+      GROUP BY directory ORDER BY MAX(time_updated) DESC LIMIT 50;" 2>/dev/null || true)
+fi
+
+# --- Ein hyprctl-Aufruf, nach der Kappung ------------------------------------
+classes='[]'
+if command -v "$BIN_HYPRCTL" >/dev/null 2>&1; then
+  h="$("$BIN_TIMEOUT" 5 "$BIN_HYPRCTL" clients -j 2>/dev/null | read_stream_capped "$MAX_FILE")" \
+    && classes="$(printf '%s' "$h" | "$BIN_JQ" -c '[.[].class // empty]' 2>/dev/null || echo '[]')"
+fi
+
+# --- Ein jq-Aufruf baut die Antwort -----------------------------------------
+{
+  i=0
+  while [ "$i" -lt "${#PATHS[@]}" ]; do
+    exists=false; [ -d "${PATHS[$i]}" ] && exists=true
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "${NAMES[$i]}" "${PATHS[$i]}" "$(tilde_abbrev "${PATHS[$i]}")" \
+      "$(app_id_for "${PATHS[$i]}")" "${PINNED[$i]}" "$exists"
+    i=$((i + 1))
+  done
+} | "$BIN_JQ" -R -s --argjson state "$state" --argjson known "$known" \
+        --argjson classes "$classes" --argjson capped "$CAPPED" '
+  (split("\n") - [""]) | map(split("\t")) | map(
+    . as $row
+    # "$row" statt blossem "." nach dem Pipe zu $classes: "$classes |
+    # index(.[3])" wuerde .[3] gegen $classes selbst auswerten (das ist
+    # nach dem Pipe das neue "."), nicht gegen die Zeile -- der Vergleich
+    # traefe dann nie und running bliebe immer false.
+    | ($row[1]) as $p
+    | ($state.projects[$p].model // null) as $m
+    | { name: $row[0], path: $p, displayPath: $row[2], appId: $row[3],
+        pinned: ($row[4] == "true"), exists: ($row[5] == "true"), capped: $capped,
+        running: ($classes | index($row[3]) != null),
+        model: $m,
+        modelLabel: (if $m == null then null else ($m | split("/") | last) end),
+        modelKnown: (if $m == null then true
+                     elif ($known | length) == 0 then true
+                     else ($known | index($m) != null) end) })'
