@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Modell-Liste fuer das Panel: was das installierte opencode erreichen kann.
+# Faellt auf den Cache zurueck, wenn der Aufruf scheitert oder haengt -- ein
+# ausgeschalteter LM-Studio-Server darf die Bar nicht blockieren.
+set -uo pipefail
+. "$(dirname "$(readlink -f "$0")")/_common.sh"
+
+ME="$(basename "$0")"
+STORE="$(dirname "$(readlink -f "$0")")/omarchy-opencode-store"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/smartalb.opencode"
+CACHE="$CACHE_DIR/models.json"
+MAX_MODELS=2000
+TIMEOUT="${OC_MODELS_TIMEOUT:-5}"
+REFRESH_HOURS="${OC_REFRESH_HOURS:-24}"
+
+[ "${1:-}" = "list" ] && [ "${2:-}" = "--json" ] || {
+  echo "Usage: $ME list --json [--refresh]" >&2; exit 1; }
+refresh=false
+[ "${3:-}" = "--refresh" ] && refresh=true
+
+emit() {  # emit <source> <stale> <capped> <ids…auf stdin>
+  local src="$1" stale="$2" capped="$3"
+  local stars; stars="$("$STORE" stars 2>/dev/null | "$BIN_JQ" -R -s 'split("\n") - [""]')"
+  "$BIN_JQ" -R -s \
+    --arg src "$src" --argjson stale "$stale" --argjson capped "$capped" \
+    --argjson stars "$stars" --arg now "$("$BIN_DATE" -u +%Y-%m-%dT%H:%M:%SZ)" '
+    (split("\n") - [""]) as $ids
+    | { generatedAt: $now, stale: $stale, source: $src, capped: $capped,
+        models: ($ids | map({
+            id: .,
+            provider: (split("/")[0]),
+            label: (split("/") | last),
+            starred: (. as $i | $stars | index($i) != null)
+          })
+          # Nur nach starred sortieren, nicht zusaetzlich nach id: ein
+          # zweites Sortierkriterium wuerde innerhalb der unmarkierten
+          # Modelle alphabetisch umsortieren und die von opencode gelieferte
+          # Reihenfolge zerstoeren -- sort_by in jq ist stabil, daher reicht
+          # das starred-Kriterium allein, um Sterne nach oben zu holen und
+          # alles andere unangetastet zu lassen.
+          | sort_by(if .starred then 0 else 1 end)) }'
+}
+
+emit_error() {  # emit_error <code>
+  "$BIN_JQ" -nc --arg e "$1" --arg now "$("$BIN_DATE" -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{generatedAt:$now, stale:true, source:"none", capped:false, models:[], error:$e}'
+}
+
+cache_fresh() {
+  [ -f "$CACHE" ] || return 1
+  [ "$REFRESH_HOURS" -gt 0 ] || return 1
+  local age_limit="$((REFRESH_HOURS * 3600))" mtime now
+  mtime="$("$BIN_STAT" -c %Y "$CACHE" 2>/dev/null)" || return 1
+  now="$("$BIN_DATE" +%s)"
+  [ "$((now - mtime))" -lt "$age_limit" ]
+}
+
+serve_cache() {  # gibt den Cache mit stale-Markierung aus, oder none
+  local data
+  if [ -f "$CACHE" ] && data="$(read_capped "$CACHE" "$MAX_FILE")"; then
+    printf '%s' "$data" | "$BIN_JQ" -c '.stale = true | .source = "cache"'
+    return 0
+  fi
+  return 1
+}
+
+OPENCODE="${OPENCODE_BIN:-$(command -v opencode 2>/dev/null || true)}"
+
+if [ "$refresh" = false ] && cache_fresh; then
+  read_capped "$CACHE" "$MAX_FILE" || { emit_error "cache-too-large"; exit 0; }
+  echo
+  exit 0
+fi
+
+if [ -z "$OPENCODE" ] || [ ! -x "$OPENCODE" ]; then
+  serve_cache || emit_error "opencode-missing"
+  exit 0
+fi
+
+raw=""
+rc=0
+raw="$("$BIN_TIMEOUT" "$TIMEOUT" "$OPENCODE" models 2>/dev/null | read_stream_capped "$MAX_FILE")" || rc=$?
+if [ "$rc" = 8 ]; then
+  serve_cache || emit_error "models-too-large"
+  exit 0
+fi
+if [ "$rc" != 0 ] || [ -z "$raw" ]; then
+  serve_cache || emit_error "models-unavailable"
+  exit 0
+fi
+
+# Nur syntaktisch gueltige IDs, und die Kardinalitaet vor allem Weiteren
+# gekappt: 2500 Zeilen sind keine Antwort, sondern eine Flut.
+ids="$(printf '%s\n' "$raw" | while IFS= read -r line; do
+         valid_model_id "$line" && printf '%s\n' "$line"
+       done)"
+count="$(printf '%s' "$ids" | grep -c . || true)"
+capped=false
+if [ "$count" -gt "$MAX_MODELS" ]; then
+  ids="$(printf '%s\n' "$ids" | "$BIN_HEAD" -n "$MAX_MODELS")"
+  capped=true
+fi
+
+out="$(printf '%s\n' "$ids" | emit "opencode" false "$capped")"
+mkdir -p "$CACHE_DIR"
+tmp="$("$BIN_MKTEMP" "$CACHE_DIR/.models.json.XXXXXX")" && {
+  printf '%s' "$out" > "$tmp" && chmod 600 "$tmp" && "$BIN_MV" -f "$tmp" "$CACHE" || rm -f "$tmp"
+}
+printf '%s\n' "$out"
