@@ -46,6 +46,21 @@ emit_error() {  # emit_error <code>
     '{generatedAt:$now, stale:true, source:"none", capped:false, models:[], error:$e}'
 }
 
+# Ruling 19: dieselbe Datei-Art-Pruefung wie omarchy-opencode-store fuer
+# seine Zustandsdatei -- ein Symlink am Cache-Pfad wuerde read_capped
+# lesen lassen, wohin er auch zeigt, und "[ -f "$CACHE" ]" alleine reicht
+# nicht: dieser Test folgt Symlinks (ein Symlink auf eine gueltige JSON-
+# Datei besteht ihn). "stat" (ohne -L) liefert dagegen die Metadaten des
+# Symlinks selbst, nicht des Ziels -- deshalb pruefen wir separat und
+# zuerst per "-L". Anders als beim Zustandsspeicher darf dieses Skript
+# nicht mit Exit 6 abbrechen (das Panel sammelt stdout ein), sondern muss
+# den Fehler im JSON melden: emit_error statt return.
+cache_is_invalid() {
+  [ -L "$CACHE" ] && return 0
+  [ -e "$CACHE" ] && [ ! -f "$CACHE" ] && return 0
+  return 1
+}
+
 cache_fresh() {
   [ -f "$CACHE" ] || return 1
   [ "$REFRESH_HOURS" -gt 0 ] || return 1
@@ -57,6 +72,10 @@ cache_fresh() {
 
 serve_cache() {  # gibt den Cache mit stale-Markierung aus, oder none
   local data
+  if cache_is_invalid; then
+    emit_error "cache-not-a-file"
+    return 0
+  fi
   if [ -f "$CACHE" ] && data="$(read_capped "$CACHE" "$MAX_FILE")"; then
     printf '%s' "$data" | "$BIN_JQ" -c '.stale = true | .source = "cache"'
     return 0
@@ -67,6 +86,10 @@ serve_cache() {  # gibt den Cache mit stale-Markierung aus, oder none
 OPENCODE="${OPENCODE_BIN:-$(command -v opencode 2>/dev/null || true)}"
 
 if [ "$refresh" = false ] && cache_fresh; then
+  if cache_is_invalid; then
+    emit_error "cache-not-a-file"
+    exit 0
+  fi
   read_capped "$CACHE" "$MAX_FILE" || { emit_error "cache-too-large"; exit 0; }
   echo
   exit 0
@@ -79,7 +102,11 @@ fi
 
 raw=""
 rc=0
-raw="$("$BIN_TIMEOUT" "$TIMEOUT" "$OPENCODE" models 2>/dev/null | read_stream_capped "$MAX_FILE")" || rc=$?
+# Ruling 20: "-k 5" toetet mit SIGKILL, falls der Kindprozess SIGTERM
+# ignoriert -- ohne das stuende das Versprechen "die Bar blockiert nie"
+# auf der Kulanz des Kindprozesses. Dieselbe Form wie beim runner()-Helfer
+# des Panels (siehe Design-Dokument).
+raw="$("$BIN_TIMEOUT" -k 5 "$TIMEOUT" "$OPENCODE" models 2>/dev/null | read_stream_capped "$MAX_FILE")" || rc=$?
 if [ "$rc" = 8 ]; then
   serve_cache || emit_error "models-too-large"
   exit 0
@@ -103,7 +130,15 @@ fi
 
 out="$(printf '%s\n' "$ids" | emit "opencode" false "$capped")"
 mkdir -p "$CACHE_DIR"
-tmp="$("$BIN_MKTEMP" "$CACHE_DIR/.models.json.XXXXXX")" && {
-  printf '%s' "$out" > "$tmp" && chmod 600 "$tmp" && "$BIN_MV" -f "$tmp" "$CACHE" || rm -f "$tmp"
-}
+# Ruling 19: dieselbe Pruefung auch vor dem Schreiben -- sonst wuerde ein
+# Symlink am Cache-Pfad hier stillschweigend durch "mv -f" ersetzt statt
+# abgelehnt zu werden. Das frisch geholte Ergebnis geht trotzdem auf
+# stdout: nur das Ablegen im Cache wird uebersprungen, nicht die Antwort.
+if cache_is_invalid; then
+  :
+else
+  tmp="$("$BIN_MKTEMP" "$CACHE_DIR/.models.json.XXXXXX")" && {
+    printf '%s' "$out" > "$tmp" && chmod 600 "$tmp" && "$BIN_MV" -f "$tmp" "$CACHE" || rm -f "$tmp"
+  }
+fi
 printf '%s\n' "$out"

@@ -143,4 +143,62 @@ test_sterne_stehen_oben_und_sind_markiert() {
   assert_eq "$(printf '%s' "$out" | jq -r '.models[0].starred')" "true"
 }
 
+# Ruling 19: dieselbe Datei-Art-Pruefung wie bei omarchy-opencode-store fuer
+# seine Zustandsdatei -- ein Symlink am Cache-Pfad wuerde "[ -f "$CACHE" ]"
+# (das Symlinks folgt) und damit cache_fresh() bestehen, und read_capped
+# wuerde lesen, wohin er auch zeigt. Das Ziel enthaelt hier absichtlich ein
+# ECHTES, gueltiges Modell ("real/model") -- ein Lesefehler waere sonst
+# nicht von einer erfolgreich verweigerten Pruefung zu unterscheiden. Nur
+# wenn die Pruefung wirklich vor dem Lesen greift, bleibt "real/model"
+# unsichtbar; ein bloss fehlschlagender Lesezugriff haette stattdessen zu
+# "models-unavailable" oder aehnlichem gefuehrt, nicht zu "cache-not-a-file".
+test_symlink_als_cache_wird_nicht_gefolgt() {
+  mkdir -p "$(dirname "$(cachefile)")"
+  target="$SANDBOX/echtes_ziel.json"
+  printf '%s' '{"generatedAt":"2020-01-01T00:00:00Z","stale":false,"source":"cache","capped":false,"models":[{"id":"real/model","provider":"real","label":"model","starred":false}]}' > "$target"
+  ln -s "$target" "$(cachefile)"
+  out="$("$MODELS" list --json)"
+  assert_eq "$(printf '%s' "$out" | jq -r '.source')" "none"
+  assert_eq "$(printf '%s' "$out" | jq -r '.error')" "cache-not-a-file"
+  assert_not_contains "$out" "real/model"
+}
+
+# Ruling 19, Schreibseite: derselbe Symlink darf auch beim Schreiben nicht
+# ersetzt werden -- "mv -f tmp $CACHE" wuerde ihn sonst stillschweigend
+# durch eine neue Datei ersetzen. "--refresh" umgeht den Lesepfad oben
+# vollstaendig (refresh=true ueberspringt den ersten "if"-Zweig) und ruft
+# echt ab, damit dieser Test wirklich den Schreibpfad trifft, nicht den
+# Lesepfad von eben.
+test_symlink_als_cache_wird_bei_refresh_nicht_ueberschrieben() {
+  stub_opencode
+  mkdir -p "$(dirname "$(cachefile)")"
+  target="$SANDBOX/irgendein_ziel.json"
+  printf '%s' 'kein gueltiges json, aber das ist hier egal' > "$target"
+  ln -s "$target" "$(cachefile)"
+  out="$("$MODELS" list --json --refresh)"
+  assert_eq "$(printf '%s' "$out" | jq -r '.source')" "opencode"
+  [ -L "$(cachefile)" ] || fail "der Symlink wurde ersetzt statt erhalten zu bleiben"
+  assert_eq "$(readlink "$(cachefile)")" "$target"
+}
+
+# Ruling 20: "-k 5" fehlte bisher -- ein Kindprozess, der SIGTERM
+# ignoriert, liefe trotz "timeout" unbegrenzt weiter, und das Versprechen
+# "die Bar blockiert nie" stuende auf seiner Kulanz. Ein Doppelgaenger, der
+# SIGTERM ignoriert, waere in einer Testsuite selbst fragil (Timing,
+# Signal-Handling je nach System) -- deshalb hier bewusst eine
+# Struktur-Pruefung statt einer Zeitmessung: ein Protokoll-Doppelgaenger
+# fuer "timeout" (ueber TIMEOUT_BIN, nicht ueber den PATH -- das Skript
+# ruft timeout absolut auf) zeichnet seinen Aufruf auf und reicht ihn an
+# den echten timeout weiter, damit der eigentliche Aufruf trotzdem
+# funktioniert. Ehrlich in dem Sinn, dass sie genau das behauptet, was sie
+# zeigt: die Form des Aufrufs, nicht sein Verhalten unter einem
+# hartnaeckigen Kindprozess.
+test_timeout_aufruf_traegt_minus_k_5() {
+  stub_opencode
+  make_stub timeout 'exec /usr/bin/timeout "$@"'
+  export TIMEOUT_BIN="$SANDBOX/stub/timeout"
+  "$MODELS" list --json --refresh >/dev/null
+  assert_contains "$(stub_log timeout)" "-k 5"
+}
+
 run_tests
