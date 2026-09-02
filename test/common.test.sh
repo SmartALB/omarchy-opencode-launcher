@@ -17,6 +17,25 @@ test_valid_model_id_lehnt_kaputte_ids_ab() {
   ! valid_model_id "openai/gpt 5"       || fail "Leerzeichen akzeptiert"
   ! valid_model_id ""                   || fail "leer akzeptiert"
   ! valid_model_id 'openai/$(id)'       || fail "Substitution akzeptiert"
+  ! valid_model_id "openai/a;id"        || fail "Semikolon akzeptiert"
+  ! valid_model_id "openai/a|id"        || fail "Pipe akzeptiert"
+  ! valid_model_id "openai/a&&id"       || fail "Und-Verknuepfung akzeptiert"
+  ! valid_model_id 'openai/`id`'        || fail "Backtick-Substitution akzeptiert"
+}
+
+# Ruling 7: die models.dev-Katalogpruefung zeigte reale Modell-IDs mit @, :
+# und ~ im Folgesegment -- diese Zeichen muessen durchgelassen werden, ohne
+# dass sich die Ablehnung von Shell-Metazeichen (siehe Test oben) aufweicht.
+test_valid_model_id_akzeptiert_katalog_sonderzeichen() {
+  . "$COMMON"
+  valid_model_id "cloudflare-workers-ai/@cf/nvidia/nemotron-3-120b-a12b" \
+    || fail "@ im Folgesegment abgelehnt"
+  valid_model_id "nano-gpt/gemini-2.5-flash-preview-04-17:thinking" \
+    || fail ": im Folgesegment abgelehnt"
+  valid_model_id "openrouter/~anthropic/claude-opus-latest" \
+    || fail "~ im Folgesegment abgelehnt"
+  valid_model_id "lmstudio/openai/gpt-oss-20b" \
+    || fail "drei Segmente ohne Sonderzeichen abgelehnt"
 }
 
 test_app_id_unterscheidet_gleichnamige_ordner() {

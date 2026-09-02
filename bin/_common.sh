@@ -55,10 +55,14 @@ app_id_for() {
 # ist eine gueltige ID. Keine Leerzeichen, kein leeres Segment, keine
 # Shell-Metazeichen -- ein Segment als "[^/[:space:]]+" gefasst wuerde
 # "openai/$(id)" durchlassen, weil $, ( und ) weder Schraegstrich noch
-# Leerraum sind.
+# Leerraum sind. Ruling 7: die models.dev-Katalogpruefung zeigte, dass echte
+# IDs @, : und ~ im Folgesegment brauchen (z.B. "cloudflare-workers-ai/@cf/
+# nvidia/nemotron-3-120b-a12b", "nano-gpt/gemini-2.5-flash-preview-04-17:
+# thinking", "openrouter/~anthropic/claude-opus-latest") -- daher die
+# erweiterte, aber weiterhin abzaehlende Positivliste je Folgesegment.
 valid_model_id() {
   [ -n "${1:-}" ] || return 1
-  [[ "$1" =~ ^[A-Za-z0-9~._-]+(/[A-Za-z0-9._-]+)+$ ]] || return 1
+  [[ "$1" =~ ^[A-Za-z0-9~._-]+(/[A-Za-z0-9._:@~+-]+)+$ ]] || return 1
   return 0
 }
 
