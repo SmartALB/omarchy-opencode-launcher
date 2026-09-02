@@ -17,8 +17,27 @@ Panel {
   // test_panel_version_entspricht_dem_manifest haelt beide zusammen.
   readonly property string pluginVersion: "1.0.0"
 
+  // Quality (Fix Runde 1): sechs Stellen lasen bisher "root.bar.fontFamily"
+  // direkt -- "bar" wird erst in Loader.onLoaded eingesetzt, der ERSTE
+  // Render-Durchlauf sieht also "null" und jede dieser Stellen protokollierte
+  // einen TypeError. Dasselbe Muster wie im Schwesterplugin smartalb.vpn
+  // ("fontFam" mit Rueckfall auf Style.fontFamily). root.barForeground ist
+  // davon nicht betroffen: die Basis "Panel" (qs.Ui) liefert das bereits
+  // abgesichert.
+  readonly property string fontFam: root.bar ? root.bar.fontFamily : Style.fontFamily
+
   readonly property string scriptDir:
     Qt.resolvedUrl(".").toString().replace("file://", "") + "/bin"
+
+  // Quality (Fix Runde 1): scriptDir wanderte bisher UNESCAPED in jede
+  // Kommandozeile -- Qt.resolvedUrl kann Zeichen prozent-kodieren, und ein
+  // Installationsverzeichnis mit Leer- oder Sonderzeichen war damit nicht
+  // abgesichert wie jeder andere interpolierte Wert. scriptCmd() haengt den
+  // Skriptnamen an und escaped das Ganze EINMAL, an einer Stelle -- jeder
+  // Aufrufer haengt nur noch geschuetzte Argumente an.
+  function scriptCmd(name) {
+    return root.shellEscape(root.scriptDir + "/" + name)
+  }
 
   // Der Launcher ruft nur eigene Skripte; 20 s sind reichlich und kurz
   // genug, dass ein verklemmter Aufruf das Panel nicht festhaelt.
@@ -67,17 +86,72 @@ Panel {
   property string loadError: ""
   property string launchError: ""
   property bool modelsStale: false
+  property string modelsSource: ""
+  property string modelsError: ""
   property string sheetPath: ""
   property int cursor: 0
+  // Wer den laufenden storeProc-Aufruf ausgeloest hat: das Setzen/Loeschen
+  // eines Modells (aktualisiert danach die Projektliste, weil deren
+  // "modelLabel" sich geaendert hat) oder das Umschalten eines Sterns
+  // (aktualisiert danach die Modell-Liste, weil deren Sortierung und
+  // "starred"-Markierung sich geaendert hat). Ein Feld statt zwei
+  // getrennter Prozesse: beides sind kurze, seltene Schreibzugriffe auf
+  // denselben Store, ein zweiter Process-Typ wuerde nur Component.
+  // onDestruction um einen weiteren Eintrag verlaengern, ohne dass irgendwo
+  // zwei solche Aufrufe je gleichzeitig liefen.
+  property string storeAction: ""
+
+  // C3 (Fix Runde 1): Umschalt+Eingabetaste bei "confirmNewWindow" musste
+  // bisher NICHTS merken -- die zweite Umschalt+Eingabetaste nahm denselben
+  // Zweig wie die erste, ein zweites Fenster war so nie erreichbar.
+  // confirmArmedPath haelt fest, FUER WELCHES Projekt die Bestaetigung
+  // schon aussteht; jede andere Taste, ein Zeilenwechsel, ein Klick auf
+  // eine andere Zeile, das Schliessen des Panels oder ein Timeout von
+  // wenigen Sekunden nehmen sie wieder zurueck (disarmConfirm()) --
+  // README.md verspricht "das muss einmal bestaetigt werden", nicht
+  // "bleibt beliebig lang scharf".
+  property string confirmArmedPath: ""
+  property string confirmHint: ""
+
+  function disarmConfirm() {
+    root.confirmArmedPath = ""
+    root.confirmHint = ""
+    confirmTimer.stop()
+  }
+
+  function armConfirm(path) {
+    root.confirmArmedPath = path
+    root.confirmHint = "Noch einmal Umschalt+Eingabetaste fuer ein zweites Fenster"
+    confirmTimer.restart()
+  }
+
+  Timer {
+    id: confirmTimer
+    interval: 4000
+    onTriggered: root.disarmConfirm()
+  }
 
   // Einstellungen aus dem shell.json-Eintrag, ueber setting() der Basis.
   // Zahlen werden hier begrenzt, nicht im Skript geglaubt: der Wert wandert
   // in eine Kommandozeile, also darf er nur eine Zahl sein.
+  //
+  // W2 (Fix Runde 1): "Number(...) || 24" verwandelte ein bewusst
+  // konfiguriertes 0 in 24 -- 0 ist im Skript aber bedeutsam ("den
+  // Zwischenspeicher nie als frisch behandeln"). numOrDefault() ersetzt nur
+  // NICHT-Zahlen (NaN, "", ein fehlender Wert) durch den Standard; eine
+  // echte 0 bleibt 0. recentCount hatte denselben Fehler nie beobachtbar,
+  // weil sein Standard selbst 0 ist -- trotzdem derselbe Helfer, damit die
+  // beiden Werte nicht wieder auseinanderlaufen.
+  function numOrDefault(raw, fallback) {
+    var n = Number(raw)
+    return isFinite(n) ? n : fallback
+  }
+
   readonly property string barLabelMode: String(root.setting("barLabel", "Icon"))
   readonly property int recentCount:
-    Math.max(0, Math.min(50, Number(root.setting("recentCount", 5)) || 0))
+    Math.max(0, Math.min(50, root.numOrDefault(root.setting("recentCount", 5), 0)))
   readonly property int refreshHours:
-    Math.max(0, Math.min(720, Number(root.setting("catalogRefreshHours", 24)) || 24))
+    Math.max(0, Math.min(720, root.numOrDefault(root.setting("catalogRefreshHours", 24), 24)))
   readonly property bool confirmNewWindow: root.setting("confirmNewWindow", false) === true
 
   // Die Einstellungen erreichen die Skripte als Umgebungszuweisung vor dem
@@ -85,10 +159,17 @@ Panel {
   readonly property string envPrefix:
     "OC_RECENT_COUNT=" + root.recentCount + " OC_REFRESH_HOURS=" + root.refreshHours + " "
 
+  // Quality: waehrend ein Start oder ein Store-Schreibzugriff laeuft,
+  // sperren die Zeilen (Klick, Stern, Chevron) -- wie im Schwesterplugin
+  // smartalb.vpn. Verhindert auch, dass ein zweiter, schneller Klick eine
+  // laufende Process-Zuweisung ueberschreibt, waehrend die erste noch nicht
+  // beendet ist (bekannte Einschraenkung aus dem Vorgaengerbericht).
+  readonly property bool busy: launchProc.running || storeProc.running
+
   Process {
     id: projectsProc
     running: true
-    command: root.runnerOut(root.envPrefix + root.scriptDir + "/omarchy-opencode-projects list --json")
+    command: root.runnerOut(root.envPrefix + root.scriptCmd("omarchy-opencode-projects") + " list --json")
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -103,17 +184,32 @@ Panel {
     }
   }
 
+  // W1 (Fix Runde 1): "error" und "source" wurden bisher nie gelesen. Mit
+  // source: "none" zeigte der Picker eine leere Liste PLUS die Meldung
+  // "Liste aus dem Zwischenspeicher" -- eine Behauptung ueber einen
+  // Zwischenspeicher, der in diesem Fall gar nicht existiert.
+  // bin/omarchy-opencode-models setzt "error" immer zusammen mit
+  // "models: []"; ModelSheet.statusText uebersetzt den Code in eine
+  // Meldung, die den tatsaechlichen Grund nennt.
   Process {
     id: modelsProc
-    command: root.runnerOut(root.envPrefix + root.scriptDir + "/omarchy-opencode-models list --json")
+    command: root.runnerOut(root.envPrefix + root.scriptCmd("omarchy-opencode-models") + " list --json")
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        var raw = String(text || "")
         try {
-          var d = JSON.parse(String(text || "{}"))
-          root.models = d.models || []
+          var d = JSON.parse(raw === "" ? "{}" : raw)
+          root.models = Array.isArray(d.models) ? d.models : []
           root.modelsStale = d.stale === true
-        } catch (e) { root.models = []; root.modelsStale = true }
+          root.modelsSource = String(d.source || "")
+          root.modelsError = String(d.error || "")
+        } catch (e) {
+          root.models = []
+          root.modelsStale = true
+          root.modelsSource = ""
+          root.modelsError = "panel-parse-error"
+        }
       }
     }
   }
@@ -127,7 +223,14 @@ Panel {
         if (m !== "") root.launchError = m.split("\n").pop()
       }
     }
-    onExited: projectsProc.running = true
+    onExited: {
+      if (root.storeAction === "star") {
+        modelsProc.command = root.runnerOut(root.envPrefix + root.scriptCmd("omarchy-opencode-models") + " list --json")
+        modelsProc.running = true
+      } else {
+        projectsProc.running = true
+      }
+    }
   }
 
   Process {
@@ -143,8 +246,8 @@ Panel {
   }
 
   function openProject(entry, newWindow) {
-    if (!entry || entry.exists === false) return
-    var c = root.scriptDir + "/omarchy-opencode-launch " + root.shellEscape(entry.path)
+    if (!entry || entry.exists === false || launchProc.running) return
+    var c = root.scriptCmd("omarchy-opencode-launch") + " " + root.shellEscape(entry.path)
     if (entry.model) c += " --model " + root.shellEscape(entry.model)
     if (newWindow) c += " --new-window"
     root.launchError = ""
@@ -153,18 +256,38 @@ Panel {
   }
 
   function setModel(path, id) {
+    if (storeProc.running) return
+    root.storeAction = "model"
     var c = id === ""
-      ? root.scriptDir + "/omarchy-opencode-store unset " + root.shellEscape(path)
-      : root.scriptDir + "/omarchy-opencode-store set " + root.shellEscape(path)
+      ? root.scriptCmd("omarchy-opencode-store") + " unset " + root.shellEscape(path)
+      : root.scriptCmd("omarchy-opencode-store") + " set " + root.shellEscape(path)
         + " " + root.shellEscape(id)
     storeProc.command = root.runnerErr(c)
     storeProc.running = true
   }
 
+  // G2: der Picker zeichnete einen Stern, aber keine Stelle rief je
+  // "store star|unstar" auf.
+  function findModel(id) {
+    for (var i = 0; i < root.models.length; i++) if (root.models[i].id === id) return root.models[i]
+    return null
+  }
+
+  function toggleStar(id, currentlyStarred) {
+    if (storeProc.running) return
+    root.storeAction = "star"
+    var c = root.scriptCmd("omarchy-opencode-store") + " " + (currentlyStarred ? "unstar" : "star")
+      + " " + root.shellEscape(id)
+    storeProc.command = root.runnerErr(c)
+    storeProc.running = true
+  }
+
   function refreshAll() {
+    root.launchError = ""
+    root.disarmConfirm()
     projectsProc.running = false; projectsProc.running = true
-    modelsProc.command = root.runnerOut(root.envPrefix + root.scriptDir
-      + "/omarchy-opencode-models list --json --refresh")
+    modelsProc.command = root.runnerOut(root.envPrefix + root.scriptCmd("omarchy-opencode-models")
+      + " list --json --refresh")
     modelsProc.running = true
   }
 
@@ -174,8 +297,15 @@ Panel {
     sheet.visible = true
   }
 
+  // C2 (Fix Runde 1, zweiter Teil): schliesst der Picker nicht auch beim
+  // Schliessen des Panels (Aussenklick, Klick auf ein anderes Bar-Icon,
+  // IPC "close"), bleibt "sheetPath" auf dem alten Projekt stehen -- beim
+  // naechsten Oeffnen erschiene der Picker ueber dem FALSCHEN Projekt.
+  // sheetPath wird deshalb hier, nicht erst beim naechsten openSheetFor(),
+  // zurueckgesetzt.
   function closeSheet() {
     sheet.visible = false
+    root.sheetPath = ""
     if (keyCatcher) keyCatcher.forceActiveFocus()
   }
 
@@ -184,7 +314,21 @@ Panel {
 
   // Beim Oeffnen des Panels einen frischen Stand holen: der Laufzustand
   // (welches Projekt gerade laeuft) veraendert sich zwischen zwei Oeffnungen.
-  onOpenedChanged: if (root.opened && !projectsProc.running) projectsProc.running = true
+  //
+  // C2 (Fix Runde 1): der else-Zweig ist neu -- ein Panel, das schliesst,
+  // muss den Picker mitschliessen (siehe closeSheet()) und eine noch
+  // scharfe Zweites-Fenster-Bestaetigung zuruecknehmen, sonst wirkt ein
+  // Umschalt+Eingabetaste nach dem Wiederoeffnen auf ein Projekt, das der
+  // Benutzer laengst nicht mehr vor Augen hat.
+  onOpenedChanged: {
+    if (root.opened) {
+      root.launchError = ""
+      if (!projectsProc.running) projectsProc.running = true
+    } else {
+      root.closeSheet()
+      root.disarmConfirm()
+    }
+  }
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -201,9 +345,8 @@ Panel {
             : "")
     tooltipText: "opencode Launcher"
     // Nur Links- und Mittelklick sind belegt. Das von WidgetButton geerbte
-    // Mausrad-Signal ("wheelMoved") bleibt hier absichtlich unverbunden:
-    // ein Scrollen ueber der Bar darf keinen Start und keine Aenderung
-    // ausloesen.
+    // Mausrad-Signal bleibt hier absichtlich unverbunden: ein Scrollen ueber
+    // der Bar darf keinen Start und keine Aenderung ausloesen.
     onPressed: function (b) {
       if (b === Qt.MiddleButton) root.refreshAll()
       else root.toggle()
@@ -218,7 +361,14 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(340))
-    contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight, Style.space(480))
+    // Quality (Fix Runde 1): die Hoehe kam bisher NUR aus der Projektliste
+    // (panelColumn.implicitHeight) -- bei einem einzigen Projekt war der
+    // geoeffnete Picker dadurch nur ein paar Pixel hoch, weil die Zeilen
+    // des Pickers selbst nichts zur Hoehe des Panels beitrugen. sheet.
+    // minHeight ist die vom Picker selbst verlangte Mindesthoehe.
+    contentHeight: panel.fittedContentHeight(
+      sheet.visible ? Math.max(panelColumn.implicitHeight, sheet.minHeight) : panelColumn.implicitHeight,
+      Style.space(480))
 
     // Tastenfuehrung der Projektliste. Ein eigener Handler statt
     // PanelKeyCatcher, weil Umschalt+Eingabetaste (zweites Fenster) den
@@ -231,17 +381,50 @@ Panel {
       focus: true
       Keys.priority: Keys.BeforeItem
       Keys.onPressed: function (e) {
+        // C2 (Fix Runde 1): zusaetzliche, explizite Absicherung neben dem
+        // Fokuswechsel in ModelSheet.onVisibleChanged (siehe dort). Ein
+        // Tastendruck darf NIE hier ankommen, solange der Picker offen ist
+        // -- egal ob der Fokus schon umgezogen ist oder (im theoretischen
+        // Fall eines verzoegerten Qt.callLater) noch nicht.
+        if (sheet.visible) { e.accepted = false; return }
         var list = root.projects
-        if (e.key === Qt.Key_Down) { root.cursor = Math.min(root.cursor + 1, list.length - 1); e.accepted = true }
-        else if (e.key === Qt.Key_Up) { root.cursor = Math.max(root.cursor - 1, 0); e.accepted = true }
-        else if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) {
-          var second = (e.modifiers & Qt.ShiftModifier) !== 0
-          if (second && root.confirmNewWindow) { root.launchError = "Umschalt+Eingabetaste noch einmal fuer ein zweites Fenster"; e.accepted = true; return }
-          root.openProject(list[root.cursor], second); e.accepted = true
+        if (e.key === Qt.Key_Down) {
+          root.disarmConfirm()
+          root.cursor = Math.min(root.cursor + 1, list.length - 1); e.accepted = true
         }
-        else if (e.key === Qt.Key_M) { if (list[root.cursor]) root.openSheetFor(list[root.cursor].path); e.accepted = true }
-        else if (e.key === Qt.Key_R) { root.refreshAll(); e.accepted = true }
+        else if (e.key === Qt.Key_Up) {
+          root.disarmConfirm()
+          root.cursor = Math.max(root.cursor - 1, 0); e.accepted = true
+        }
+        else if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) {
+          var entry = list[root.cursor]
+          var second = (e.modifiers & Qt.ShiftModifier) !== 0
+          // C3 (Fix Runde 1): echte einmalige Bestaetigung statt eines
+          // Zustands, der beim zweiten Umschalt+Eingabetaste denselben Zweig
+          // erneut nimmt. Scharf ist die Bestaetigung nur fuer GENAU das
+          // Projekt, das beim ersten Mal gemeint war (confirmArmedPath) --
+          // ein Cursorwechsel dazwischen (siehe oben, disarmConfirm())
+          // nimmt sie zurueck.
+          if (second && root.confirmNewWindow) {
+            if (entry && root.confirmArmedPath === entry.path) {
+              root.disarmConfirm()
+              root.openProject(entry, true)
+            } else if (entry) {
+              root.armConfirm(entry.path)
+            }
+          } else {
+            root.disarmConfirm()
+            root.openProject(entry, second)
+          }
+          e.accepted = true
+        }
+        else if (e.key === Qt.Key_M) {
+          root.disarmConfirm()
+          if (list[root.cursor]) root.openSheetFor(list[root.cursor].path); e.accepted = true
+        }
+        else if (e.key === Qt.Key_R) { root.disarmConfirm(); root.refreshAll(); e.accepted = true }
         else if (e.key === Qt.Key_Escape) {
+          root.disarmConfirm()
           if (sheet.visible) root.closeSheet(); else root.close()
           e.accepted = true
         }
@@ -259,10 +442,38 @@ Panel {
           width: scrollArea.availableWidth
           spacing: Style.space(4)
 
-          PanelSectionHeader {
-            text: "OPENCODE"
-            foreground: root.barForeground
-            fontFamily: root.bar.fontFamily
+          // W4 (Fix Runde 1): manifest.json und README sprachen von "dem
+          // Aktualisieren-Knopf im Panel" -- den gab es nicht, nur den
+          // unsichtbaren Mittelklick auf das Bar-Icon und die Taste "r".
+          // Jetzt gibt es ihn wirklich, neben der Ueberschrift.
+          Item {
+            id: headerRow
+            width: panelColumn.width
+            height: Math.max(header.implicitHeight, refreshButton.implicitHeight)
+
+            PanelSectionHeader {
+              id: header
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              text: "OPENCODE"
+              foreground: root.barForeground
+              fontFamily: root.fontFam
+            }
+
+            PanelActionButton {
+              id: refreshButton
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              // nf-fa-refresh, im Basic Multilingual Plane -- anders als
+              // der Roboter oben passt der Codepunkt in EIN \u-Escape,
+              // ohne Ersatzpaar.
+              iconText: "\uF021"
+              tooltipText: "Liste aktualisieren"
+              foreground: root.barForeground
+              fontFamily: root.fontFam
+              enabled: !projectsProc.running && !modelsProc.running
+              onClicked: root.refreshAll()
+            }
           }
 
           Text {
@@ -270,7 +481,7 @@ Panel {
             visible: root.loadError !== ""
             text: root.loadError
             color: root.barForeground
-            font.family: root.bar.fontFamily
+            font.family: root.fontFam
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
           }
@@ -279,8 +490,18 @@ Panel {
             visible: root.launchError !== ""
             text: root.launchError
             color: root.barForeground
-            font.family: root.bar.fontFamily
+            font.family: root.fontFam
             font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+          Text {
+            width: panelColumn.width
+            visible: root.confirmHint !== ""
+            text: root.confirmHint
+            color: root.barForeground
+            font.family: root.fontFam
+            font.pixelSize: Style.font.caption
+            opacity: 0.85
             wrapMode: Text.WordWrap
           }
           Text {
@@ -288,7 +509,22 @@ Panel {
             visible: root.listCapped
             text: "Liste bei 200 Projekten gekappt"
             color: root.barForeground
-            font.family: root.bar.fontFamily
+            font.family: root.fontFam
+            font.pixelSize: Style.font.caption
+            opacity: 0.7
+            wrapMode: Text.WordWrap
+          }
+          // G4: eine leere Liste ohne Fehler zeigte bisher nur die
+          // Ueberschrift -- keine Erklaerung und kein Hinweis, wo
+          // angeheftete Projekte ueberhaupt eingetragen werden.
+          Text {
+            width: panelColumn.width
+            visible: root.loadError === "" && root.projects.length === 0 && !projectsProc.running
+            text: "Noch keine Projekte. Angeheftete Projekte stehen in "
+              + "~/.config/omarchy/opencode-launcher.json, zuletzt verwendete kommen "
+              + "automatisch von opencode dazu."
+            color: root.barForeground
+            font.family: root.fontFam
             font.pixelSize: Style.font.caption
             opacity: 0.7
             wrapMode: Text.WordWrap
@@ -303,13 +539,19 @@ Panel {
               width: panelColumn.width
               implicitHeight: rowColumn.implicitHeight + Style.space(8)
               radius: Style.cornerRadius
-              color: (rowMouse.containsMouse && modelData.exists) ? Style.hoverFill : "transparent"
-              opacity: modelData.exists === false ? 0.45 : 1.0
+              // G3: der Tastatur-Cursor (root.cursor, treibt Enter/"m"/
+              // Umschalt+Enter) war bisher unsichtbar -- nur Maus-Hover
+              // zeigte etwas. Jetzt hat die per Tastatur markierte Zeile
+              // eine eigene, von Hover unterscheidbare Farbe.
+              color: index === root.cursor
+                ? Style.selectedFill
+                : ((rowMouse.containsMouse && modelData.exists && !root.busy) ? Style.hoverFill : "transparent")
+              opacity: (modelData.exists === false || root.busy) ? 0.45 : 1.0
 
               Column {
                 id: rowColumn
                 anchors.left: parent.left
-                anchors.right: parent.right
+                anchors.right: modelChip.left
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.leftMargin: Style.space(6)
                 anchors.rightMargin: Style.space(6)
@@ -318,11 +560,8 @@ Panel {
                 Text {
                   width: parent.width
                   text: (modelData.running ? "\u25CF  " : "\u25CB  ") + modelData.name
-                    + (modelData.modelLabel
-                        ? "   \u2304 " + modelData.modelLabel + (modelData.modelKnown === false ? " (?)" : "")
-                        : "   \u2304 (Std.)")
                   color: root.barForeground
-                  font.family: root.bar.fontFamily
+                  font.family: root.fontFam
                   font.pixelSize: Style.font.body
                   elide: Text.ElideRight
                 }
@@ -330,20 +569,65 @@ Panel {
                   width: parent.width
                   text: modelData.displayPath
                   color: root.barForeground
-                  font.family: root.bar.fontFamily
+                  font.family: root.fontFam
                   font.pixelSize: Style.font.caption
                   opacity: 0.6
                   elide: Text.ElideMiddle
                 }
               }
 
+              // W3 (Fix Runde 1): der Chevron war reiner Text INNERHALB der
+              // Zeile -- ein Klick darauf traf die Zeile und startete
+              // opencode, statt den Picker zu oeffnen. Jetzt ist er ein
+              // eigenstaendiges Steuerelement mit eigener Trefferflaeche
+              // (z:1, ueber der Zeilen-MouseArea).
+              Rectangle {
+                id: modelChip
+                z: 1
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.rightMargin: Style.space(6)
+                radius: Style.cornerRadius
+                color: (chipMouse.containsMouse && !root.busy) ? Style.hoverFill : "transparent"
+                implicitWidth: chipText.implicitWidth + Style.space(12)
+                implicitHeight: chipText.implicitHeight + Style.space(6)
+
+                Text {
+                  id: chipText
+                  anchors.centerIn: parent
+                  text: (modelData.modelLabel
+                          ? modelData.modelLabel + (modelData.modelKnown === false ? " (?)" : "")
+                          : "Std.") + "  \u2304"
+                  color: root.barForeground
+                  font.family: root.fontFam
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+
+                MouseArea {
+                  id: chipMouse
+                  anchors.fill: parent
+                  hoverEnabled: !root.busy
+                  enabled: !root.busy
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    root.disarmConfirm()
+                    root.cursor = index
+                    root.openSheetFor(modelData.path)
+                  }
+                }
+              }
+
               MouseArea {
                 id: rowMouse
+                z: 0
                 anchors.fill: parent
-                hoverEnabled: true
+                hoverEnabled: !root.busy
+                enabled: !root.busy
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                 cursorShape: modelData.exists ? Qt.PointingHandCursor : Qt.ArrowCursor
                 onClicked: function (e) {
+                  root.disarmConfirm()
                   root.cursor = index
                   if (e.button === Qt.RightButton) root.openSheetFor(modelData.path)
                   else if (modelData.exists) root.openProject(modelData, false)
@@ -360,9 +644,18 @@ Panel {
       anchors.fill: parent
       models: root.models
       stale: root.modelsStale
+      source: root.modelsSource
+      errorCode: root.modelsError
+      busy: storeProc.running
+      fg: root.barForeground
+      fontFam: root.fontFam
       onPicked: function (id) { root.setModel(root.sheetPath, id); root.closeSheet() }
       onCleared: { root.setModel(root.sheetPath, ""); root.closeSheet() }
       onClosed: root.closeSheet()
+      onStarToggled: function (id) {
+        var m = root.findModel(id)
+        root.toggleStar(id, !!(m && m.starred))
+      }
     }
   }
 }

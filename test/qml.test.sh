@@ -11,7 +11,15 @@ test_kein_prozessstart_ausserhalb_der_helfer() {
   # suchen liesse sich durch genau diese Verschiebung umgehen: launchProc
   # und storeProc setzen ihr Kommando erst beim Aufruf, per "=", und waeren
   # fuer eine reine "command:"-Suche unsichtbar.
-  bad="$(grep -nE 'command[[:space:]]*[:=]' "$ROOT"/*.qml | grep -v 'root.runner' || true)"
+  #
+  # Fix Runde 1: blind fuer "Quickshell.execDetached([...])" -- ein zweiter
+  # Weg, einen Prozess zu starten, der an "command"/runner()/runnerOut()/
+  # runnerErr() ganz vorbeigeht und deshalb keine der dortigen Grenzen
+  # (absoluter Pfad, Frist, Ausgabe-Deckel) traegt. Probe: eine Zeile
+  # "Quickshell.execDetached([root.scriptDir + \"/x\"])" in Panel.qml
+  # eingefuegt -> faellt jetzt durch, vorher unsichtbar.
+  bad="$( { grep -nE 'command[[:space:]]*[:=]' "$ROOT"/*.qml | grep -v 'root.runner'; \
+            grep -nE 'Quickshell\.execDetached[[:space:]]*\(' "$ROOT"/*.qml; } || true)"
   assert_eq "$bad" ""
 }
 
@@ -27,9 +35,14 @@ test_kein_path_aufgeloester_interpreter() {
   # Pruefung abgeschnitten -- sonst faellt schon eine Erklaerung wie
   # "edit() { # edit <jq-programm>" durch, obwohl dort kein Aufruf steht.
   # QML kennt keine "#"-Kommentare, das Abschneiden trifft dort also nie.
+  # Fix Runde 1: "sh" fehlte in der Positivliste -- ein "/usr/bin/env sh"
+  # oder ein nacktes "sh -c" waere PATH-aufgeloest gewesen und diese Regel
+  # haette es nicht gesehen. Probe: eine Zeile "\"sh\", \"-c\"" in runner()
+  # eingesetzt -> faellt jetzt durch (vorher: durchgerutscht, weil "sh"
+  # nicht in der Liste stand).
   bad="$(for f in "$ROOT"/*.qml "$ROOT"/bin/*; do
            sed -E 's/^[[:space:]]*#.*$//; s/([[:space:]])#.*$/\1/' "$f" \
-             | grep -noP '(?<!/usr/bin/)(?<![[:alnum:]_.-])(bash|timeout|head|jq|sqlite3|hyprctl)\b' \
+             | grep -noP '(?<!/usr/bin/)(?<![[:alnum:]_.-])(bash|sh|timeout|head|jq|sqlite3|hyprctl)\b' \
              | sed "s|^|$f:|"
          done \
           | grep -vE 'BIN_[A-Z0-9]+=' || true)"
@@ -57,18 +70,37 @@ test_stderr_helfer_nutzt_prozess_substitution_keine_pipe() {
 
 test_abbau_deckt_jeden_erklaerten_prozess() {
   declared="$(grep -oE 'id: [a-zA-Z]+Proc' "$ROOT/Panel.qml" | awk '{print $2}' | sort -u)"
-  # Gefunden durch Mutationsprobe (Task 7): "|| true" ist noetig, nicht nur
-  # Stil. Diese Datei setzt "pipefail", und run_tests fuehrt jeden Test
-  # zusaetzlich unter "set -e" aus (beides bleibt in der Subshell aktiv).
-  # Ist der Abbau in Component.onDestruction leer (die Mutation, die dieser
-  # Test finden soll), liefert "grep -oE '[a-zA-Z]+Proc'" null Treffer und
-  # damit Exit 1 -- unter pipefail reisst das die ganze Pipeline-Zuweisung
-  # mit, und "set -e" beendet die Testfunktion sofort an dieser Stelle, VOR
-  # dem "assert_eq" unten. Der Test bleibt zwar FAIL (run_tests sieht den
-  # von 0 verschiedenen Exit-Status auch so), aber ganz ohne die
-  # "erwartet/erhalten"-Meldung -- rot aus dem richtigen Grund, aber stumm.
+  # Fix Runde 1: die alte Fassung suchte im onDestruction-Block nach JEDEM
+  # Vorkommen von "[a-zA-Z]+Proc" -- ganz gleich, ob der Name dort wirklich
+  # gestoppt wurde oder nur ERWAEHNT ist. Der Reviewer zeigte zwei Wege, das
+  # auszunutzen: (a) alle vier "= false" durch "= true" ersetzen -- der Name
+  # steht immer noch in der Zeile "projectsProc.running = true", die alte
+  # Regel sah nur den Namen, nicht den Wert, und blieb GRUEN, obwohl damit
+  # nichts mehr gestoppt wird; (b) den ganzen Block durch einen Kommentar
+  # ersetzen, der die vier Namen nur noch AUFZAEHLT ("stoppt projectsProc,
+  # modelsProc, ..."), ohne sie tatsaechlich zu stoppen -- auch das blieb
+  # GRUEN, weil ein Kommentar fuer diese Regel nicht von echtem Code zu
+  # unterscheiden war.
+  #
+  # Die neue Fassung verlangt die woertliche Teilkette
+  # "<name>.running = false" (mit variablem Leerraum um "=") an der
+  # Fundstelle selbst -- ein Name, der nur erwaehnt oder auf "true" gesetzt
+  # wird, zaehlt nicht mehr als gestoppt.
+  #
+  # Proben (siehe Task-6-Fix-Runde-1-Report fuer die tatsaechlich
+  # ausgefuehrten Kommandos und ihre Ausgabe):
+  #   (a) "= false" -> "= true" bei allen vieren: FAELLT jetzt (vorher:
+  #       blieb gruen).
+  #   (b) den Block durch "// stoppt projectsProc, modelsProc, launchProc,
+  #       storeProc" ersetzt: FAELLT jetzt (vorher: blieb gruen).
+  #   (c) ein fuenfter, nie deklarierter Prozess "ghostProc" wird im Block
+  #       zusaetzlich per "ghostProc.running = false" gestoppt: FAELLT (die
+  #       Regel ist eine echte Mengengleichheit, kein reines Enthaltensein).
+  #   (d) ein fuenfter, deklarierter Prozess ("id: ghostProc") wird NICHT
+  #       im Block gestoppt: FAELLT.
   stopped="$(sed -n '/Component.onDestruction/,/^  }/p' "$ROOT/Panel.qml" \
-             | grep -oE '[a-zA-Z]+Proc' | sort -u || true)"
+             | grep -oE '[a-zA-Z]+Proc\.running[[:space:]]*=[[:space:]]*false' \
+             | grep -oE '^[a-zA-Z]+Proc' | sort -u || true)"
   assert_eq "$declared" "$stopped"
 }
 
@@ -83,7 +115,13 @@ test_zahlenwerte_aus_einstellungen_sind_begrenzt() {
 }
 
 test_mausrad_ist_unbelegt() {
-  bad="$(grep -n 'onWheel' "$ROOT"/*.qml || true)"
+  # Fix Runde 1: blind fuer "WheelHandler { onRotationChanged: ... }" -- ein
+  # WheelHandler kann das Mausrad ueber JEDES eigene Signal abgreifen
+  # (onRotationChanged, onActiveRotationChanged, ...), nicht nur ueber ein
+  # nach "onWheel" benanntes. Die reine Textsuche nach "onWheel" sah so ein
+  # Konstrukt gar nicht. Probe: "WheelHandler { onRotationChanged: root.
+  # refreshAll() }" in Panel.qml eingefuegt -> faellt jetzt durch.
+  bad="$(grep -nE 'onWheel|WheelHandler' "$ROOT"/*.qml || true)"
   assert_eq "$bad" ""
 }
 
