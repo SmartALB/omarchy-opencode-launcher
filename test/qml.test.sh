@@ -596,4 +596,16 @@ test_untergruppen_schwelle_arithmetik() {
   assert_eq "$([ "$first_solo_index" -gt "$last_qualifying_index" ] && echo ja || echo nein)" "ja"
 }
 
+test_schwellenwerte_stehen_fest() {
+  # Die Schwelle ist die tragende Regel der dritten Ebene: unterteilt wird
+  # nur, wenn mindestens ZWEI Untergruppen mit je mindestens ZWEI Modellen
+  # entstehen. Der Bash-Test daneben rechnet die Arithmetik nur NACH und
+  # merkt deshalb nicht, wenn jemand die Konstante im QML aufweicht
+  # (">= 2" -> ">= 1"). Diese Regel schliesst genau diese Luecke: sie liest
+  # die beiden Vergleiche im Quelltext.
+  block="$(sed -n '/function buildGroupedRows/,/^  }/p' "$ROOT/ModelSheet.qml")"
+  assert_contains "$block" "length >= 2"
+  assert_contains "$block" "qualifying >= 2"
+}
+
 run_tests
