@@ -112,7 +112,7 @@ to the path shortened with `~`:
 ```json
 {
   "projects": [
-    { "name": "playwright-tests", "path": "~/git/project-e2e" },
+    { "name": "api", "path": "~/code/backend" },
     { "path": "/srv/work/api" }
   ]
 }
@@ -137,7 +137,7 @@ is written into opencode's own configuration.
 Each project is a single line: a running marker (`●` running, `○`
 not) followed by the project's name if the config gives one, or its path
 otherwise. A path is shortened to its last three segments with a `…/`
-prefix (`~/git/project-e2e` stays as-is; something deeper is cut down to,
+prefix (`~/git/dotfiles` stays as-is; something deeper is cut down to,
 say, `…/e2e/tests/fixtures`), and elided further from the left if the
 row is still too narrow for it. The full absolute path always sits in a
 tooltip on hover. The running marker lives outside the text that gets
