@@ -1021,18 +1021,49 @@ Panel {
           // Pfeile und Trennpunkte als \u-Escapes, wie der Roboter und der
           // Chevron oben: eine Glyphe direkt in der Datei geht beim
           // Kopieren durch Werkzeuge verloren.
-          Text {
+          // Fusszeile: Legende links, Version rechts, EINE Zeile. Getrennt
+          // sichtbar -- die Legende nur, wenn es Zeilen gibt, auf die sie
+          // sich beziehen kann, die Version IMMER: gerade im Leerzustand
+          // will man wissen, welche Fassung laeuft. Ein Item mit zwei
+          // ankernden Texten statt einer Row, weil beide unabhaengig
+          // sichtbar sein muessen und eine Row eine unsichtbare Zelle
+          // einfach zusammenschiebt.
+          Item {
             width: panelColumn.width
-            visible: root.projects.length > 0
-            // Nur die vier haeufigsten Tasten. Die vollstaendige Tabelle steht
-            // im README ("Keys and clicks"); eine Fusszeile, die alles auffuehrt,
-            // brach auf zwei Zeilen um und kostete mehr Hoehe als sie half.
-            text: "\u2191\u2193  \u00B7  Enter  \u00B7  m  \u00B7  Esc"
-            color: root.barForeground
-            font.family: root.fontFam
-            font.pixelSize: Style.font.caption
-            opacity: 0.55
-            wrapMode: Text.WordWrap
+            implicitHeight: Math.max(footerKeys.implicitHeight, footerVersion.implicitHeight)
+
+            Text {
+              id: footerKeys
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              width: parent.width - footerVersion.width - Style.space(8)
+              visible: root.projects.length > 0
+              // Nur die vier haeufigsten Tasten. Die vollstaendige Tabelle steht
+              // im README ("Keys and clicks"); eine Fusszeile, die alles auffuehrt,
+              // brach auf zwei Zeilen um und kostete mehr Hoehe als sie half.
+              text: "\u2191\u2193  \u00B7  Enter  \u00B7  m  \u00B7  Esc"
+              color: root.barForeground
+              font.family: root.fontFam
+              font.pixelSize: Style.font.caption
+              opacity: 0.55
+              elide: Text.ElideRight
+            }
+
+            // Dieselbe Darstellung wie im Schwesterplugin smartalb.vpn
+            // (rechtsbuendig, Deckkraft 0.55, Beschriftungsgroesse), damit
+            // beide Plugins ihre Version gleich zeigen. pluginVersion wird
+            // von test_panel_version_entspricht_dem_manifest gegen
+            // manifest.json gehalten.
+            Text {
+              id: footerVersion
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: "v" + root.pluginVersion
+              color: root.barForeground
+              font.family: root.fontFam
+              font.pixelSize: Style.font.caption
+              opacity: 0.55
+            }
           }
         }
       }

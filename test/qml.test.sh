@@ -1137,4 +1137,16 @@ test_modelsheet_frei_von_nicht_ascii_bytes() {
   assert_eq "$bad" ""
 }
 
+test_version_steht_immer_unten_rechts() {
+  # Die Version gehoert in die Fusszeile, rechtsbuendig -- und sie darf NICHT
+  # an root.projects gekoppelt sein: im Leerzustand (noch nichts angeheftet)
+  # will man erst recht wissen, welche Fassung laeuft. Die Legende links ist
+  # dagegen sehr wohl an Projekte gekoppelt, denn ohne Zeilen bezieht sie
+  # sich auf nichts.
+  block="$(sed -n '/id: footerVersion/,/^            }/p' "$ROOT/Panel.qml")"
+  assert_contains "$block" 'anchors.right: parent.right'
+  assert_contains "$block" '"v" + root.pluginVersion'
+  assert_not_contains "$block" 'root.projects.length'
+}
+
 run_tests
