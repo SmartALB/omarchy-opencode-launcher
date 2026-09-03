@@ -176,4 +176,26 @@ test_stern_umschalten_erzwingt_frischen_katalog() {
   assert_contains "$out" "--refresh"
 }
 
+test_displayPath_erscheint_hoechstens_einmal() {
+  # G5 (Panel-Redesign): die Projektzeile zeigte bisher Name und
+  # displayPath als zwei uebereinanderstehende Zeilen -- fuer jedes
+  # automatisch aufgenommene Projekt derselbe Text zweimal. Jetzt gibt es
+  # nur noch die eine Namenszeile, die "displayPath" genau EINMAL nennt
+  # (die Unterscheidung "echter Name oder abgekuerzter Pfad"). Ein
+  # spaeterer Refactor, der die zweite Zeile stillschweigend wieder
+  # einfuehrt, fuegt zwangslaeufig eine ZWEITE Fundstelle hinzu -- diese
+  # Regel zaehlt Zeilen, nicht Vorkommen, weil die eine legitime Zeile den
+  # Bezeichner selbst zweimal traegt (Vergleich und Rueckfallzweig).
+  count="$(grep -c 'displayPath' "$ROOT/Panel.qml")"
+  assert_eq "$count" "1"
+}
+
+test_projektzeile_elidiert_links() {
+  # G5: die Namenszeile muss ElideLeft tragen -- bei einem langen
+  # abgekuerzten Pfad soll das ENDE (der aussagekraeftige Teil) sichtbar
+  # bleiben und die Ellipse vorne stehen, nicht wie zuvor ElideRight.
+  out="$(grep -A6 'modelData.name !== modelData.displayPath' "$ROOT/Panel.qml")"
+  assert_contains "$out" "Text.ElideLeft"
+}
+
 run_tests

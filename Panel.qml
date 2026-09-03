@@ -728,23 +728,43 @@ Panel {
                 anchors.rightMargin: Style.space(6)
                 spacing: Style.space(2)
 
+                // G5: Name und Pfad standen bisher als zwei Zeilen
+                // uebereinander, obwohl beide fuer jedes automatisch
+                // aufgenommene Projekt denselben Text zeigten -- das
+                // Skript setzt "name" nur dann auf den abgekuerzten Pfad,
+                // wenn die Config keinen eigenen Namen liefert. Jetzt gibt
+                // es nur noch diese eine Zeile: einen echten Namen (kurz,
+                // elidiert praktisch nie) oder, wenn keiner da ist, den
+                // abgekuerzten Pfad. ElideLeft statt ElideRight, damit bei
+                // langen Pfaden das ENDE erhalten bleibt (der aussagekraeftige
+                // Teil) und die Ellipse vorne sitzt; der volle, absolute Pfad
+                // (nicht die Tilde-Form) steht im Hover-Tooltip auf rowMouse.
                 Text {
                   width: parent.width
-                  text: (modelData.running ? "\u25CF  " : "\u25CB  ") + modelData.name
+                  text: (modelData.running ? "\u25CF  " : "\u25CB  ")
+                    + (modelData.name !== modelData.displayPath ? modelData.name : modelData.displayPath)
                   color: root.barForeground
                   font.family: root.fontFam
                   font.pixelSize: Style.font.body
-                  elide: Text.ElideRight
+                  elide: Text.ElideLeft
                 }
-                Text {
-                  width: parent.width
-                  text: modelData.displayPath
-                  color: root.barForeground
-                  font.family: root.fontFam
-                  font.pixelSize: Style.font.caption
-                  opacity: 0.6
-                  elide: Text.ElideMiddle
-                }
+              }
+
+              // G5: derselbe PanelToolTip-auf-eigener-MouseArea wie bei
+              // PanelActionButton (siehe /usr/share/omarchy/shell/Ui/
+              // PanelActionButton.qml) -- an rowMouse gehaengt statt an
+              // eine zweite MouseArea. modelData.path, nicht der oben
+              // gezeigte abgekuerzte Pfad -- "voll" meint die absolute
+              // Form. Dieselbe Kombination -- PanelToolTip in
+              // einer clip:true-Liste -- traegt bereits die Bluetooth- und
+              // Netzwerk-Panels der Shell (deren "Forget"-Knopf-Tooltip
+              // sitzt genauso in einem geclippten ListView/Flickable ohne
+              // Sonderbehandlung); Popups laufen ueber den Window-Overlay
+              // und nicht ueber den normalen, geclippten Item-Baum.
+              PanelToolTip {
+                visible: rowMouse.containsMouse
+                text: modelData.path
+                fontFamily: root.fontFam
               }
 
               // W3 (Fix Runde 1): der Chevron war reiner Text INNERHALB der
