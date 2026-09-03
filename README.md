@@ -13,7 +13,7 @@ session at the same time is never a race over a shared file.
 ## Screenshots
 
 ![The panel: pinned and recent projects, each with its remembered model](images/panel.png)
-![The model picker: search, starred models on top, refresh on demand](images/picker.png)
+![The model picker: grouped by provider, searchable, with a favourites group](images/picker.png)
 
 ## Install
 
@@ -132,6 +132,17 @@ started. Pressing the row starts opencode as `opencode -m provider/model`
 in that project's directory -- the model is a flag on the process, nothing
 is written into opencode's own configuration.
 
+### The project row
+
+Each project is a single line: a running marker (`●` running, `○`
+not) followed by the project's name if the config gives one, or its path
+otherwise. A path is shortened to its last three segments with a `…/`
+prefix (`~/git/project-e2e` stays as-is; something deeper is cut down to,
+say, `…/e2e/tests/fixtures`), and elided further from the left if the
+row is still too narrow for it. The full absolute path always sits in a
+tooltip on hover. The running marker lives outside the text that gets
+shortened, so it can never be the part that disappears.
+
 The plugin derives a stable app-id from the project directory and hands
 the launch to Omarchy's own `omarchy-launch-or-focus`, which focuses an
 existing window carrying that app-id instead of starting a second one.
@@ -140,7 +151,9 @@ existing window carrying that app-id instead of starting a second one.
 
 ### Keys and clicks
 
-The panel shows a short version of this as a footer line.
+The panel's footer line shows only the four most-used keys (`↑↓ · Enter ·
+m · Esc`); the rest of this table -- `Shift+Enter`, `r`, and everything in
+the model picker -- is not on the footer, only here.
 
 | Key or click | What it does |
 |---|---|
@@ -151,15 +164,46 @@ The panel shows a short version of this as a footer line.
 | `r`, middle-click on the bar icon, or the `⟳` button | Reload the project list and the model list |
 | `Esc` | Close the model picker, or the panel if no picker is open |
 
-In the model picker:
+### The model picker
+
+Models are grouped by provider, each group collapsed behind a header
+line showing the provider's name and how many models it has, e.g.
+`opencode (64)`. Opening the picker expands the group holding the
+project's current model, if any, with the cursor on that model; everything
+else starts collapsed.
+
+Inside a provider that has enough structure to make it worthwhile, a
+third level splits the group further into sub-groups: for a three-segment
+id such as `lmstudio/google/gemma-3-12b` the sub-group is the middle
+segment (`google`); for a two-segment id such as `opencode/gpt-5-codex`
+it is the model name up to its first hyphen (`gpt`). A provider only gets
+split when that produces at least two sub-groups with at least two
+members each -- otherwise it stays a flat list. A would-be sub-group with
+just one member is not given its own header; that model is listed flat,
+after the real sub-groups.
+
+Row text is shortened to whatever the headers above it haven't already
+said: under `lmstudio › google` a row just reads `gemma-3-12b`; a model
+that is the only one of its kind keeps its provider (`liquid/lfm-x`),
+since no header named it; a flat, unsplit provider strips only its own
+name. Typing anything drops all of this -- search flattens every level
+into one list and matches against each model's full id, even though the
+grouped view would have shown it shortened.
+
+Starred models get a `★ Favourites (n)` group of their own at the very
+top, shown only once at least one model is starred, and always expanded
+when the picker opens. It is a shortcut, not a move: a starred model
+still appears in its own provider group as well, and provider counts
+don't change because of it. Rows inside Favourites show the full model
+id, since "Favourites" doesn't say which provider they belong to.
 
 | Key or click | What it does |
 |---|---|
-| type anything | Filter the list |
+| type anything | Filter the list, flattening every group |
 | `Up` / `Down` | Move the selection |
-| `Enter`, click a row | Use that model for this project |
+| `Enter`, click a row | Use that model for this project, or expand/collapse a header |
 | `Enter` with no matches | Use exactly what you typed as the model id |
-| `*`, or click the star | Star the selected model, so it sorts to the top |
+| `*`, or click the star | Star or unstar the selected model |
 | the bottom row | Forget this project's model and let opencode use its own default |
 | `Esc` | Close the picker without changing anything |
 
