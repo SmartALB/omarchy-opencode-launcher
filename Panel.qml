@@ -878,8 +878,10 @@ Panel {
           Text {
             width: panelColumn.width
             visible: root.projects.length > 0
-            text: "\u2191\u2193 move  \u00B7  Enter open  \u00B7  Shift+Enter new window"
-              + "  \u00B7  m or right-click model  \u00B7  r refresh  \u00B7  Esc close"
+            // Nur die vier haeufigsten Tasten. Die vollstaendige Tabelle steht
+            // im README ("Keys and clicks"); eine Fusszeile, die alles auffuehrt,
+            // brach auf zwei Zeilen um und kostete mehr Hoehe als sie half.
+            text: "\u2191\u2193  \u00B7  Enter  \u00B7  m  \u00B7  Esc"
             color: root.barForeground
             font.family: root.fontFam
             font.pixelSize: Style.font.caption
