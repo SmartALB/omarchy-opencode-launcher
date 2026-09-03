@@ -3,7 +3,8 @@ node_modules/
 test/.mutation-backup/
 
 # Ruling 36: die Superpowers-Arbeitsdateien (Plan und Spezifikation) bleiben
-# auf der Platte und in der Historie, sind aber nicht mehr versioniert. Der
+# auf der Platte, sind aber nicht versioniert -- weder im Baum noch in der
+# Historie, aus der sie vor der Veroeffentlichung entfernt wurden. Der
 # Basis-Scanner des Marktplatzes liest Repository-TEXT und leitet daraus
 # Capabilities ab: beide Dateien nennen die Rechteausweitungs- und
 # Paketverwaltungs-Schluesselwoerter woertlich -- ausgerechnet in den
