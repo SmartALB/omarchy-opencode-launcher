@@ -1,10 +1,19 @@
-# Marketplace submission -- draft, not yet submitted
+# Marketplace submission
 
-This file is preparation only. It will be filed as a GitHub issue in the
-marketplace repository only after explicit approval. A later
-re-validation is triggered by **editing the issue body** (the automation
-reacts to `opened`/`edited`/`labeled`, not to a comment) -- an external
-pull request is not picked up by the marketplace repository.
+Filed 2026-09-03 as
+[omacom/omarchy-plugin-marketplace#4606](https://github.com/omacom/omarchy-plugin-marketplace/issues/4606),
+title `[Plugin]: opencode Launcher`, at commit `3693f6f`.
+
+A re-validation is triggered by **editing the issue body**; the
+automation reacts to `opened`/`edited`/`reopened`/`labeled`, not to a
+comment, and an external pull request is not picked up at all.
+
+The `submission` label is applied by the issue form only when the form is
+used in a browser. Filing through the API leaves it unset, which does not
+matter: both `route-issue-automation.yml` and `validate-submission.yml`
+accept a title starting with `[Plugin]:` as an alternative to the label.
+The automation added `submission`, `validated` and
+`security-review-required` itself.
 
 ## Repository
 
@@ -21,7 +30,13 @@ Developer Tools
 
 ## Tags
 
-Bar, AI, Developer Tools
+Bar, AI, Launcher
+
+`Developer Tools` exists only as a category. The tag list in
+`.github/ISSUE_TEMPLATE/submit-plugin.yml` is closed -- AI, Bar,
+Education, Games, Hyprland, Kids, Launcher, Media, Power management,
+Quickshell, Security, System, Workspaces -- and a submission carrying
+more than three tags is rejected outright.
 
 ## Maintainer notes
 
@@ -41,3 +56,19 @@ everything else stays usable.
 `./test/mutation.sh`, a set of mutation probes (also prints its own
 tally) that demonstrate the tests actually fail when a safeguard is
 removed.
+
+## Outcome of the automated checks
+
+Validation passed on every point: repository public and reachable, one
+valid and uniquely identified manifest, README and license found at the
+root, Quattro compatibility confirmed, root preview detected. Verdict:
+*ready for listing review*.
+
+The security baseline asks for a manual review with an empty finding
+list and a single derived capability, `installer` -- attached to the mere
+existence of the `install` and `uninstall` files, and its own report
+notes that no change is necessarily required. Neither `privilege` nor
+`package-manager` was derived, which is what the keyword discipline
+throughout this repository was for. Any plugin shipping an installation
+script earns this label, and the submission checklist cannot be
+satisfied without one.
