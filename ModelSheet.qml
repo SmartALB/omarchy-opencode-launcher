@@ -201,7 +201,10 @@ Item {
         var starredFirst = bucket.filter(function (x) { return x.starred })
           .concat(bucket.filter(function (x) { return !x.starred }))
         for (var j = 0; j < starredFirst.length; j++) {
-          rows.push({ kind: "model", model: starredFirst[j], indent: 1 })
+          // G9: der Anbieter bleibt unterteilungsfrei -- die Kopfzeile
+          // darueber nennt nur den Anbieter (Segment 0), headerSegments
+          // bleibt also bei 1.
+          rows.push({ kind: "model", model: starredFirst[j], indent: 1, headerSegments: 1 })
         }
         continue
       }
@@ -218,7 +221,19 @@ Item {
           var subStarredFirst = subBucket.filter(function (x) { return x.starred })
             .concat(subBucket.filter(function (x) { return !x.starred }))
           for (var k = 0; k < subStarredFirst.length; k++) {
-            rows.push({ kind: "model", model: subStarredFirst[k], indent: 2 })
+            // G9: headerSegments je Mitglied, nicht je Untergruppe --
+            // dieselbe Kriterium wie oben bei der Namensfindung (segs.length
+            // >= 3): nur wenn DIESE ID selbst drei Segmente hat, nannte die
+            // Kopfzeile darueber ein echtes mittleres Pfadsegment (Anbieter
+            // UND Hersteller, also 2). Kam der Untergruppenname stattdessen
+            // aus der Namensheuristik (zweisegmentige ID), nennt die
+            // Kopfzeile keinen echten Pfadteil -- nur der Anbieter (0) zaehlt
+            // als Segment, headerSegments bleibt 1. Das ist Entscheidung 1
+            // aus dem Auftrag: die Heuristik-Kopfzeile frisst NIE in den
+            // Modellnamen hinein.
+            var memberSegs = String(subStarredFirst[k].id).split("/")
+            var memberHeaderSegments = memberSegs.length >= 3 ? 2 : 1
+            rows.push({ kind: "model", model: subStarredFirst[k], indent: 2, headerSegments: memberHeaderSegments })
           }
         }
       }
@@ -227,10 +242,40 @@ Item {
       // Kopfzeile, auf derselben Einrueckung wie eine Untergruppen-
       // Kopfzeile (indent: 1).
       for (var t = 0; t < singletons.length; t++) {
-        rows.push({ kind: "model", model: singletons[t], indent: 1 })
+        // G9: ein Einzelgaenger hat KEINE eigene Kopfzeile -- die einzige
+        // Kopfzeile darueber ist die des Anbieters. headerSegments bleibt
+        // deshalb 1, unabhaengig davon, ob seine ID zwei oder drei Segmente
+        // hat. Das ist Entscheidung 2 aus dem Auftrag: der Herstellerteil
+        // (bei einer dreisegmentigen ID) bleibt sichtbar, weil ihn keine
+        // Kopfzeile schon genannt hat.
+        rows.push({ kind: "model", model: singletons[t], indent: 1, headerSegments: 1 })
       }
     }
     return rows
+  }
+
+  // G9 (Anzeige-Kuerzung): jede Modellzeile soll nur noch zeigen, was die
+  // Kopfzeilen DARUEBER nicht schon sagen -- als benannte Funktion (wie
+  // buildGroupedRows() oben und shortPath() in Panel.qml), damit eine
+  // Textregel in test/qml.test.sh sich daran festhalten kann.
+  //
+  // Zwei Faelle:
+  // - Suchmodus (sheet.grouped === false): keine einzige Kopfzeile ist
+  //   sichtbar, also bleibt die volle ID stehen -- unveraendert wie vor
+  //   dieser Aenderung. Das Filtern selbst (sheet.shown) laeuft weiterhin
+  //   gegen die volle ID, unabhaengig davon, was hier angezeigt wird.
+  // - Gruppierte Ansicht: row.headerSegments traegt bereits (aus
+  //   buildGroupedRows() heraus, siehe dort) die Anzahl der fuehrenden
+  //   ID-Segmente, die eine Kopfzeile ueber dieser Zeile schon nennt --
+  //   diese Funktion baut das nicht nach, sie schneidet nur genau so viele
+  //   Segmente vorne ab. Eine Kopfzeile, die den Anbieter zeigt, liefert
+  //   headerSegments: 1 (Ergebnis: "hersteller/modell" oder "modell");
+  //   eine echte Untergruppen-Kopfzeile aus dem mittleren Segment liefert
+  //   headerSegments: 2 (Ergebnis: nur noch "modell").
+  function modelDisplayText(row) {
+    if (!sheet.grouped) return row.model.id
+    var segs = String(row.model.id).split("/")
+    return segs.slice(row.headerSegments).join("/")
   }
 
   // G7: solange gesucht wird, verschwinden Kopfzeilen und Einrueckung --
@@ -539,6 +584,12 @@ Item {
         // ein Einzelgaenger, oder der Anbieter bleibt unterteilungsfrei)
         // oder 2 (innerhalb einer echten Untergruppe) -- die Einrueckung
         // waechst mit der tatsaechlichen Tiefe statt einer festen Stufe.
+        // G9: der TEXT der Zeile laeuft jetzt durch sheet.modelDisplayText()
+        // statt die volle ID direkt zu zeigen -- sie kuerzt genau das weg,
+        // was die Kopfzeile(n) darueber schon sagen (siehe dort). Die Suche
+        // selbst ("sheet.shown", weiter oben) bleibt davon unberuehrt: sie
+        // filtert weiterhin gegen die volle ID, unabhaengig davon, was hier
+        // angezeigt wird.
         Text {
           visible: !row.isHeader
           anchors.left: parent.left
@@ -546,7 +597,7 @@ Item {
           anchors.verticalCenter: parent.verticalCenter
           anchors.leftMargin: Style.spacing.sm + (sheet.grouped ? Style.space(12) * modelData.indent : 0)
           anchors.rightMargin: Style.spacing.xs
-          text: row.isHeader ? "" : modelData.model.id
+          text: row.isHeader ? "" : sheet.modelDisplayText(modelData)
           color: sheet.fg
           font.family: sheet.fontFam
           font.pixelSize: Style.font.body

@@ -608,4 +608,129 @@ test_schwellenwerte_stehen_fest() {
   assert_contains "$block" "qualifying >= 2"
 }
 
+test_modellzeile_zeigt_ueber_kuerzungsfunktion() {
+  # G9 (Anzeige-Kuerzung): die Modellzeile darf die ID nicht mehr direkt
+  # zeigen -- sie muss durch modelDisplayText() laufen. Zwei Pruefungen,
+  # wie bei test_pfad_fallback_wird_gekuerzt (Panel.qml/shortPath) oben:
+  #   1) die Funktion muss ueberhaupt (genau einmal) definiert sein -- ein
+  #      Loeschen der Funktion, bei dem irgendwo noch "modelDisplayText"
+  #      als Text auftaucht, faellt hier durch, weil hier nach der
+  #      Funktions-SIGNATUR gesucht wird, nicht nur nach dem Namen.
+  #   2) die Text-Bindung der Modellzeile muss sheet.modelDisplayText(...)
+  #      aufrufen UND darf "modelData.model.id" nicht mehr direkt enthalten
+  #      -- ein Bypass, der die Funktion zwar behaelt, die Bindung aber
+  #      wieder auf die rohe ID zurueckstellt, faellt hier durch.
+  #      "-m1" nimmt bewusst nur den ERSTEN Treffer von "visible:
+  #      !row.isHeader" -- der Stern-Knopf weiter unten traegt dieselbe
+  #      Bedingung und referenziert "modelData.model.id" legitim (fuer
+  #      "starred"/"starToggled"), das darf diese Regel nicht mit erfassen.
+  def_count="$(grep -c 'function modelDisplayText(row)' "$ROOT/ModelSheet.qml")"
+  assert_eq "$def_count" "1"
+
+  mdl="$(grep -m1 -A10 'visible: !row.isHeader' "$ROOT/ModelSheet.qml")"
+  assert_contains "$mdl" "sheet.modelDisplayText(modelData)"
+  assert_not_contains "$mdl" "modelData.model.id"
+}
+
+test_kuerzung_verschluckt_niemals_herstellerpraefix_und_erhaelt_einzelgaenger() {
+  # G9, die zwei bewussten Entscheidungen aus dem Auftrag -- als
+  # Quelltext-Regel, nicht nur als Beobachtung am Ende: eine reine
+  # Text-Probe (ein einzelnes gerendertes Beispiel ansehen) koennte durch
+  # ein zufaellig passend gewaehltes Testmodell beide Faelle uebersehen,
+  # waehrend eine Aufweichung im Code trotzdem drinsteckt und beim naechsten
+  # Modell zuschlaegt. Deshalb liest diese Regel die drei betroffenen
+  # Fundstellen direkt im Funktionskoerper von buildGroupedRows():
+  #
+  #   1) Ein Untergruppen-Mitglied bekommt headerSegments NUR dann 2, wenn
+  #      SEINE EIGENE ID mindestens drei Segmente hat
+  #      ("memberSegs.length >= 3 ? 2 : 1") -- eine Untergruppe aus der
+  #      Namensheuristik (zweisegmentige ID, z.B. "opencode/gpt-5-codex")
+  #      bekommt headerSegments: 1 und behaelt damit den Herstellerteil
+  #      ("gpt-5-codex" statt "5-codex"). Ein Aufweichen auf ein festes "2"
+  #      wuerde genau dieses Verschlucken verursachen.
+  #   2) Sowohl der Einzelgaenger-Zweig als auch der Nicht-Unterteilt-Zweig
+  #      muessen headerSegments FEST auf 1 setzen -- keine der beiden
+  #      Zeilenarten hat eine eigene Kopfzeile, die einen Herstellerteil
+  #      schon genannt haette.
+  block="$(sed -n '/^  function buildGroupedRows(models, expanded) {/,/^  }/p' "$ROOT/ModelSheet.qml")"
+  assert_contains "$block" 'memberSegs.length >= 3 ? 2 : 1'
+  assert_contains "$block" 'starredFirst[j], indent: 1, headerSegments: 1'
+  assert_contains "$block" 'singletons[t], indent: 1, headerSegments: 1'
+}
+
+test_modellzeile_kuerzungsarithmetik_ueber_alle_faelle() {
+  # ACHTUNG (ehrlich, nicht schoengeredet): dies ist KEIN Aufruf der echten
+  # QML-Funktionen modelDisplayText() und buildGroupedRows() aus
+  # ModelSheet.qml -- dieselbe Einschraenkung wie bei
+  # test_shortpath_segmentarithmetik und test_untergruppen_schwelle_arithmetik
+  # oben (ModelSheet.qml importiert qs.Commons/qs.Ui, ausserhalb der
+  # laufenden Omarchy-Shell nicht aufloesbar). Was hier steht, ist eine
+  # PARALLELE Nachrechnung derselben zwei Rechenregeln in Bash: wie viele
+  # fuehrende ID-Segmente eine Kopfzeile schon zeigt (headerSegments, aus
+  # buildGroupedRows()) und wie modelDisplayText() genau diese Anzahl vorne
+  # abschneidet -- gegen fuenf IDs aus der auf dieser Maschine real
+  # gemessenen Verteilung (siehe test_untergruppen_schwelle_arithmetik),
+  # je einen Fall aus der Tabelle im Auftrag. Deckt die RECHENREGEL ab --
+  # nicht den tatsaechlich in ModelSheet.qml ausgefuehrten Bytecode; die
+  # beiden Textregeln oben plus qmllint plus die visuelle Kontrolle im
+  # Panel schliessen diese Luecke.
+  header_segments_bash() {  # header_segments_bash <situation> <id>
+    local situation="$1" id="$2"
+    case "$situation" in
+      subgroup)
+        local segs
+        IFS='/' read -ra segs <<< "$id"
+        if [ "${#segs[@]}" -ge 3 ]; then printf '2'; else printf '1'; fi
+        ;;
+      singleton|flat) printf '1' ;;
+    esac
+  }
+
+  model_display_bash() {  # model_display_bash <id> <headerSegments> <grouped:0|1>
+    local id="$1" hs="$2" grouped="$3" segs rest joined
+    if [ "$grouped" = "0" ]; then printf '%s' "$id"; return 0; fi
+    IFS='/' read -ra segs <<< "$id"
+    rest=("${segs[@]:$hs}")
+    joined="$(IFS=/; printf '%s' "${rest[*]}")"
+    printf '%s' "$joined"
+  }
+
+  # Fall 1: Untergruppen-Kopfzeile aus dem mittleren Segment (dreisegmentige
+  # ID) -- Anbieter UND Hersteller stehen schon in Kopfzeilen, nur der
+  # Modellname bleibt uebrig.
+  local id1="lmstudio/google/gemma-3-12b" hs1
+  hs1="$(header_segments_bash subgroup "$id1")"
+  assert_eq "$hs1" "2"
+  assert_eq "$(model_display_bash "$id1" "$hs1" 1)" "gemma-3-12b"
+
+  # Fall 2: Untergruppen-Kopfzeile aus der Namensheuristik (zweisegmentige
+  # ID) -- nur der Anbieter steht in einer Kopfzeile, der Herstellerteil
+  # ("gpt") ist eine Vermutung der Heuristik, keine Kopfzeile nannte ihn.
+  local id2="opencode/gpt-5-codex" hs2
+  hs2="$(header_segments_bash subgroup "$id2")"
+  assert_eq "$hs2" "1"
+  assert_eq "$(model_display_bash "$id2" "$hs2" 1)" "gpt-5-codex"
+
+  # Fall 3: Einzelgaenger (dreisegmentige ID, keine eigene Kopfzeile) --
+  # der Herstellerteil ("liquid") bleibt sichtbar, weil ihn keine Kopfzeile
+  # schon genannt hat.
+  local id3="lmstudio/liquid/lfm-x" hs3
+  hs3="$(header_segments_bash singleton "$id3")"
+  assert_eq "$hs3" "1"
+  assert_eq "$(model_display_bash "$id3" "$hs3" 1)" "liquid/lfm-x"
+
+  # Fall 4: Anbieter bleibt unterteilungsfrei -- nur der Anbieter steht in
+  # einer Kopfzeile.
+  local id4="openai/gpt-5.4" hs4
+  hs4="$(header_segments_bash flat "$id4")"
+  assert_eq "$hs4" "1"
+  assert_eq "$(model_display_bash "$id4" "$hs4" 1)" "gpt-5.4"
+
+  # Fall 5: Suchmodus (dieselbe ID wie Fall 4) -- keine einzige Kopfzeile
+  # ist sichtbar, die volle ID bleibt stehen. "headerSegments" ist hier
+  # ohne Bedeutung, model_display_bash ignoriert es im Suchmodus (grouped:0)
+  # ebenso wie modelDisplayText() selbst.
+  assert_eq "$(model_display_bash "$id4" "$hs4" 0)" "openai/gpt-5.4"
+}
+
 run_tests
