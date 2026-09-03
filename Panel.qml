@@ -167,6 +167,19 @@ Panel {
   }
 
   readonly property string barLabelMode: String(root.setting("barLabel", "Icon"))
+
+  // Anzahl der laufenden opencode-Fenster, fuer den "Running count"-Modus.
+  // Eigene Property statt Inline-Ausdruck: sie wird an zwei Stellen
+  // gebraucht (Sichtbarkeit und Zahlentext des Zaehlers), und ein Filter
+  // ueber root.projects gehoert nicht zweimal in die View.
+  readonly property int runningWindowCount:
+    root.projects.filter(function (p) { return p.running }).length
+
+  // Stellschrauben fuer das Bar-Icon: Strichstaerke in Pixeln (die Marke ist
+  // 4 Striche breit und 5 hoch) und Deckkraft des inneren Blocks.
+  readonly property int markStroke: 2
+  readonly property real markBlockOpacity: 0.5
+
   readonly property int recentCount:
     Math.max(0, Math.min(50, root.numOrDefault(root.setting("recentCount", 5), 0)))
   readonly property int refreshHours:
@@ -417,26 +430,94 @@ Panel {
     }
   }
 
-  implicitWidth: button.implicitWidth
-  implicitHeight: button.implicitHeight
+  // The opencode logomark: the blocky "o" from the official wordmark, redrawn
+  // as rectangles instead of shipping a bitmap. Two reasons: it stays crisp at
+  // any bar size, and it takes the bar's foreground colour like every other
+  // icon rather than pasting a black tile into the bar.
+  //
+  // The official favicon is built entirely from one unit -- its 64-unit stroke
+  // on a 512 grid. In those terms the mark is 4 strokes wide and 5 tall, the
+  // opening is 2x3, and the counter block is 2x2 sitting at the bottom of the
+  // opening. Deriving every dimension from an integer stroke keeps all four
+  // edges on whole pixels; computing them independently and rounding lets the
+  // block grow wider than the opening at bar size, which smears the lower half
+  // into a blob.
+  Component {
+    id: opencodeMark
 
-  BarIconButton {
-    id: button
-    anchors.fill: parent
-    bar: root.bar
-    // nf-md-robot_outline (U+F06A9), als Ersatzpaar-Escape: eine
-    // Nerd-Font-Glyphe direkt in der Datei geht beim Kopieren durch
-    // Werkzeuge verloren.
-    text: "\uDB81\uDEA9" + (root.barLabelMode === "Running count"
-            ? " " + root.projects.filter(function (p) { return p.running }).length
-            : "")
-    tooltipText: "opencode Launcher"
-    // Nur Links- und Mittelklick sind belegt. Das von WidgetButton geerbte
-    // Mausrad-Signal bleibt hier absichtlich unverbunden: ein Scrollen ueber
-    // der Bar darf keinen Start und keine Aenderung ausloesen.
-    onPressed: function (b) {
-      if (b === Qt.MiddleButton) root.refreshAll()
-      else root.toggle()
+    Item {
+      id: mark
+
+      // Stroke in pixels. 2 keeps the official proportions legible at the
+      // bar's 16px icon canvas; 3 fills more of the slot but reads heavy.
+      readonly property int s: root.markStroke
+      readonly property color markColor: root.barForeground
+
+      Item {
+        anchors.centerIn: parent
+        width: mark.s * 4
+        height: mark.s * 5
+
+        // The ring, drawn as four bars so the opening is exactly 2s x 3s.
+        Rectangle { width: parent.width; height: mark.s; anchors.top: parent.top; color: mark.markColor }
+        Rectangle { width: parent.width; height: mark.s; anchors.bottom: parent.bottom; color: mark.markColor }
+        Rectangle { width: mark.s; height: parent.height; anchors.left: parent.left; color: mark.markColor }
+        Rectangle { width: mark.s; height: parent.height; anchors.right: parent.right; color: mark.markColor }
+
+        // Counter block: fills the opening's width and its lower two thirds.
+        Rectangle {
+          x: mark.s
+          y: mark.s * 2
+          width: mark.s * 2
+          height: mark.s * 2
+          color: mark.markColor
+          opacity: root.markBlockOpacity
+        }
+      }
+    }
+  }
+
+  // iconRow statt eines einzelnen anchors.fill-Buttons: BarIconButton kann
+  // Icon und Text nicht zugleich zeigen (siehe zwei Schwesterwidgets fuer
+  // dieselbe Erkenntnis), UND sein fixedWidth ist fest auf slotSize genagelt
+  // -- ein an "text" angehaengter Zaehler wuerde also nie Platz bekommen und
+  // liefe bestenfalls unsichtbar, schlimmstenfalls abgeschnitten mit
+  // benachbarten Widgets ueberlappend. Der Zaehler ist deshalb ein eigenes
+  // Text-Element neben dem Button; implicitWidth des Panels haengt jetzt an
+  // iconRow (das unsichtbare Kinder von seiner Breitenrechnung ausnimmt), also
+  // bleibt der Icon-Modus exakt so schmal wie zuvor.
+  implicitWidth: iconRow.implicitWidth
+  implicitHeight: iconRow.implicitHeight
+
+  Row {
+    id: iconRow
+    anchors.centerIn: parent
+    spacing: Style.spacing.xs
+
+    BarIconButton {
+      id: button
+      bar: root.bar
+      iconComponent: opencodeMark
+      slotSize: Style.bar.statusSlot
+      fontSize: Style.font.caption
+      tooltipText: "opencode Launcher"
+      // Nur Links- und Mittelklick sind belegt. Das von WidgetButton geerbte
+      // Mausrad-Signal bleibt hier absichtlich unverbunden: ein Scrollen ueber
+      // der Bar darf keinen Start und keine Aenderung ausloesen.
+      onPressed: function (b) {
+        if (b === Qt.MiddleButton) root.refreshAll()
+        else root.toggle()
+      }
+    }
+
+    Text {
+      id: countLabel
+      visible: root.barLabelMode === "Running count"
+      anchors.verticalCenter: parent.verticalCenter
+      text: String(root.runningWindowCount)
+      color: root.barForeground
+      font.family: root.fontFam
+      font.pixelSize: Style.font.caption
     }
   }
 
