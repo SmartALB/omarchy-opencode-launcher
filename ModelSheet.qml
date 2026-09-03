@@ -91,6 +91,21 @@ Item {
     sheet.expandedSubgroups = next
   }
 
+  // G10 (Favoriten-Gruppe): ob die Favoriten-Kopfzeile gerade aufgeklappt
+  // ist -- ein einzelnes Bool statt eines Objekts wie bei den beiden
+  // Eigenschaften oben, weil es hoechstens EINE Favoriten-Gruppe je Picker
+  // gibt (kein Schluessel noetig). Eigene Funktion statt einer Wieder-
+  // verwendung von toggleHeader(): die Favoriten-Gruppe ist kein Anbieter
+  // und hat keinen Anbieternamen, den toggleHeader() als Schluessel
+  // braeuchte -- ein erfundener Platzhalter-Schluessel waere eine zweite,
+  // versteckte Bedeutung fuer "provider" und koennte (theoretisch) mit
+  // einem echten Anbieternamen kollidieren.
+  property bool expandedFavourites: false
+
+  function toggleFavourites() {
+    sheet.expandedFavourites = !sheet.expandedFavourites
+  }
+
   // G7: die Gruppierung als benannte Funktion (wie shortPath() in
   // Panel.qml), damit eine Textregel in test/qml.test.sh sich daran
   // festhalten kann. Reine Arithmetik ohne Datei-IO, wie shortPath():
@@ -151,6 +166,32 @@ Item {
   // Kopie irgendwo in einem Binding) -- jede andere Stelle, die wissen
   // muss, ob ein Anbieter unterteilt ist (siehe onVisibleChanged unten),
   // fragt buildGroupedRows() selbst statt die Arithmetik nachzubauen.
+  //
+  // G10 (Favoriten-Gruppe, Change 2): eine zusaetzliche Kopfzeile
+  // ("\u2605 Favourites", Stern-Glyph als \u-Escape wie ueberall in
+  // dieser Datei) landet als ALLERERSTE Zeile im Ergebnis, noch vor der
+  // ersten Anbieter-Kopfzeile -- unabhaengig davon, welcher Anbieter nach
+  // Erstauftreten zuerst kaeme. Sie existiert nur, wenn "models" (die
+  // VOLLE, ungefilterte Liste -- dieselbe Eingabe wie fuer die Anbieter-
+  // Buckets oben) mindestens ein markiertes Modell enthaelt.
+  //
+  // Bewusst VOR den Anbieter-Buckets gebaut, aus derselben "models"-Liste,
+  // NICHT aus "buckets"/"order": ein markiertes Modell bleibt dadurch
+  // zusaetzlich in seinem Anbieter-Bucket stehen (siehe die Schleife
+  // weiter unten, die "models" nicht veraendert) -- die Anbieter-Anzahl
+  // ("bucket.length" in der Kopfzeile) zaehlt weiterhin JEDES Modell genau
+  // einmal, unabhaengig von Sternen. Ein markiertes Modell erscheint damit
+  // ABSICHTLICH zweimal in "rows": einmal hier (volle ID, headerSegments:
+  // 0 -- keine Kopfzeile ueber dieser Gruppe nennt einen Anbieter oder
+  // Hersteller) und einmal unten in seiner Anbieter-/Untergruppen-Zeile
+  // (gekuerzt wie jede andere Zeile dort). "*" auf JEDER der beiden Zeilen
+  // ruft sheet.starToggled(model.id) -- dieselbe ID -- auf; welche der
+  // beiden Zeilen der Cursor beim OEFFNEN des Pickers erhaelt, regelt
+  // onVisibleChanged weiter unten bewusst (siehe dortiger Kommentar).
+  //
+  // Keine dritte Ebene hier (siehe Auftrag: "es waere selbstbezueglich") --
+  // die Favoriten-Gruppe bekommt nie eine Untergruppen-Schwelle, nie einen
+  // "indent: 2".
   function buildGroupedRows(models, expanded) {
     var order = []
     var buckets = {}
@@ -160,6 +201,23 @@ Item {
       buckets[m.provider].push(m)
     }
     var rows = []
+
+    var favourites = models.filter(function (x) { return x.starred })
+    if (favourites.length > 0) {
+      var favOpen = !!(expanded && expanded.favourites)
+      rows.push({ kind: "header", favourites: true, count: favourites.length, expanded: favOpen, indent: 0 })
+      if (favOpen) {
+        for (var f = 0; f < favourites.length; f++) {
+          // headerSegments: 0 -- keine Kopfzeile ueber dieser Zeile nennt
+          // auch nur ein Segment der ID, "Favourites" sagt nichts ueber
+          // einen Anbieter aus. modelDisplayText() schneidet also nichts
+          // ab, die volle ID bleibt stehen (z.B. "lmstudio/google/gemma-
+          // 4-12b").
+          rows.push({ kind: "model", model: favourites[f], indent: 1, headerSegments: 0, favourites: true })
+        }
+      }
+    }
+
     for (var g = 0; g < order.length; g++) {
       var provider = order[g]
       var bucket = buckets[provider]
@@ -290,7 +348,7 @@ Item {
   // buildGroupedRows(). Der Tastatur-Cursor zeigt in DIESE Liste (nicht
   // mehr direkt in "shown"), weil er jetzt auch auf Kopfzeilen stehen kann.
   readonly property var visibleRows: sheet.grouped
-    ? sheet.buildGroupedRows(sheet.models, { providers: sheet.expandedProviders, subgroups: sheet.expandedSubgroups })
+    ? sheet.buildGroupedRows(sheet.models, { providers: sheet.expandedProviders, subgroups: sheet.expandedSubgroups, favourites: sheet.expandedFavourites })
     : sheet.shown.map(function (m) { return { kind: "model", model: m } })
 
   // Die Cursor-Position darf nie ausserhalb der aktuell sichtbaren Zeilen
@@ -384,14 +442,34 @@ Item {
       }
       sheet.expandedProviders = expanded
       sheet.expandedSubgroups = expandedSub
+      // G10: die Favoriten-Gruppe klappt beim Oeffnen IMMER auf, wenn sie
+      // ueberhaupt existiert (mindestens ein markiertes Modell) -- eine
+      // zugeklappte Abkuerzung waere keine. Unabhaengig von "currentModel":
+      // ein zugeklapptes Favoriten-Kaestchen soll nicht erst auffallen,
+      // wenn zufaellig kein Modell gemerkt ist.
+      var hasStar = false
+      for (var si = 0; si < sheet.models.length; si++) {
+        if (sheet.models[si].starred) { hasStar = true; break }
+      }
+      sheet.expandedFavourites = hasStar
       // Cursor auf die Zeile des gemerkten Modells in der jetzt (durch die
       // Zeile darueber) neu berechneten "visibleRows" -- oder auf die erste
       // Zeile (Kopfzeile), wenn nichts gemerkt oder nichts gefunden wurde.
+      //
+      // G10: "!rows[j].favourites" haelt die bestehende Zusage ("die
+      // Gruppe/Untergruppe mit dem gemerkten Modell klappt auf, Cursor
+      // darauf") woertlich aufrecht, auch wenn das gemerkte Modell
+      // ZUSAETZLICH markiert ist und deshalb jetzt ZWEIMAL in "rows"
+      // steht (einmal in Favourites, einmal in seiner Anbietergruppe) --
+      // ohne diese Bedingung faende die Schleife die FRUEHERE der beiden
+      // Zeilen (Favourites steht immer zuerst) und der Cursor laendete
+      // dort statt, wie bisher, in der (oben extra dafuer aufgeklappten)
+      // Anbietergruppe.
       var rows = sheet.visibleRows
       var pos = 0
       if (found) {
         for (var j = 0; j < rows.length; j++) {
-          if (rows[j].kind === "model" && rows[j].model.id === sheet.currentModel) { pos = j; break }
+          if (rows[j].kind === "model" && !rows[j].favourites && rows[j].model.id === sheet.currentModel) { pos = j; break }
         }
       }
       sheet.cursor = pos
@@ -451,12 +529,16 @@ Item {
         // G8: eine Kopfzeile ist jetzt entweder eine Anbieter-Kopfzeile
         // (row.subgroup ist undefined -> toggleHeader) oder eine
         // Untergruppen-Kopfzeile (row.subgroup gesetzt -> toggleSubgroup).
+        // G10: oder die Favoriten-Kopfzeile (row.favourites gesetzt ->
+        // toggleFavourites) -- sie traegt weder provider noch subgroup,
+        // die Pruefung muss deshalb VOR der subgroup-Pruefung stehen.
         Keys.onReturnPressed: {
           if (sheet.visibleRows.length > 0) {
             var i = Math.max(0, Math.min(sheet.cursor, sheet.visibleRows.length - 1))
             var row = sheet.visibleRows[i]
             if (row.kind === "header") {
-              if (row.subgroup !== undefined) sheet.toggleSubgroup(row.provider, row.subgroup)
+              if (row.favourites) sheet.toggleFavourites()
+              else if (row.subgroup !== undefined) sheet.toggleSubgroup(row.provider, row.subgroup)
               else sheet.toggleHeader(row.provider)
             } else sheet.picked(row.model.id)
           } else if (search.text.trim() !== "") {
@@ -554,10 +636,18 @@ Item {
           : (rowMouse.containsMouse && !sheet.busy ? Style.hoverFill : "transparent")
         opacity: sheet.busy ? 0.6 : 1.0
 
-        // Kopfzeile: Chevron (auf-/zugeklappt) + Name + Anzahl, z.B.
-        // "opencode 64" (Anbieter, indent 0) oder "google 10" (Untergruppe,
-        // indent 1, um eine Ebene eingerueckt). Chevron als \u-Escape, wie
-        // jede Glyphe in diesem Projekt (keine Nicht-ASCII-Bytes in QML).
+        // Kopfzeile: Chevron (auf-/zugeklappt) + Name + Anzahl in Klammern,
+        // z.B. "opencode (64)" (Anbieter, indent 0), "google (10)"
+        // (Untergruppe, indent 1, um eine Ebene eingerueckt) oder "\u2605
+        // Favourites (2)" (Favoriten-Gruppe, indent 0, siehe G10). Chevron
+        // und Stern als \u-Escape, wie jede Glyphe in diesem Projekt (keine
+        // Nicht-ASCII-Bytes in QML). Zahlenwerte-in-Klammern (Change 1):
+        // "opencode (64)" statt "opencode 64" -- rein darstellerisch,
+        // aendert weder buildGroupedRows() noch irgendeine Zaehlung.
+        // Die Favoriten-Kopfzeile (modelData.favourites) zeigt Stern +
+        // "Favourites" statt eines Anbieter-/Untergruppennamens --
+        // modelData.provider ist fuer diese Zeile gar nicht gesetzt (siehe
+        // buildGroupedRows()), modelData.favourites entscheidet.
         Text {
           visible: row.isHeader
           anchors.left: parent.left
@@ -567,8 +657,9 @@ Item {
           anchors.rightMargin: Style.spacing.sm
           text: row.isHeader
             ? (modelData.expanded ? "\u25be " : "\u25b8 ")
-              + (modelData.subgroup !== undefined ? modelData.subgroup : modelData.provider)
-              + " " + modelData.count
+              + (modelData.favourites ? "\u2605 Favourites"
+                 : (modelData.subgroup !== undefined ? modelData.subgroup : modelData.provider))
+              + " (" + modelData.count + ")"
             : ""
           color: sheet.fg
           font.family: sheet.fontFam
@@ -637,7 +728,11 @@ Item {
           onClicked: {
             sheet.cursor = index
             if (row.isHeader) {
-              if (modelData.subgroup !== undefined) sheet.toggleSubgroup(modelData.provider, modelData.subgroup)
+              // G10: siehe Keys.onReturnPressed oben -- dieselbe Reihenfolge
+              // (Favoriten vor Untergruppe vor Anbieter), aus demselben
+              // Grund.
+              if (modelData.favourites) sheet.toggleFavourites()
+              else if (modelData.subgroup !== undefined) sheet.toggleSubgroup(modelData.provider, modelData.subgroup)
               else sheet.toggleHeader(modelData.provider)
             } else sheet.picked(modelData.model.id)
           }

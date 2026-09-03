@@ -733,4 +733,238 @@ test_modellzeile_kuerzungsarithmetik_ueber_alle_faelle() {
   assert_eq "$(model_display_bash "$id4" "$hs4" 0)" "openai/gpt-5.4"
 }
 
+test_favoriten_arithmetik_ueber_alle_regeln() {
+  # ACHTUNG (ehrlich, nicht schoengeredet): dies ist KEIN Aufruf der echten
+  # QML-Funktion buildGroupedRows() aus ModelSheet.qml -- dieselbe
+  # Einschraenkung wie bei test_gruppierung_arithmetik_erstauftreten_und_sterne
+  # und den anderen "*_arithmetik"-Tests oben (ModelSheet.qml importiert
+  # qs.Commons/qs.Ui, ausserhalb der laufenden Omarchy-Shell nicht
+  # aufloesbar). Was hier steht, ist eine PARALLELE Nachrechnung derselben
+  # Regeln (Change 2, Favoriten-Gruppe) in Bash: keine Kopfzeile ohne
+  # mindestens ein markiertes Modell; mit einem bzw. zwei markierten
+  # Modellen steht die Kopfzeile an POSITION 0 mit der jeweiligen Anzahl;
+  # die Anbieter-Anzahl zaehlt IMMER alle Modelle des Anbieters,
+  # unabhaengig von Sternen; ein markiertes Modell landet zweimal in der
+  # Zeilenliste (einmal unter Favourites mit headerSegments 0, einmal in
+  # seiner Anbietergruppe mit headerSegments 1). Deckt die RECHENREGEL ab
+  # -- nicht den tatsaechlich in ModelSheet.qml ausgefuehrten Bytecode; die
+  # Textregeln unten plus qmllint plus die visuelle Kontrolle im Panel
+  # schliessen diese Luecke.
+  declare -A FAV_PROV_COUNT=()
+  FAV_PROV_ORDER=()
+  FAV_ROWS=()
+
+  # build_favourite_rows_bash <id:provider:starred> ... -- baut eine
+  # flache Zeilenliste in FAV_ROWS ("header:favourites:<n>" bzw.
+  # "model:<id>:<headerSegments>" fuer die Favoriten-Zeilen,
+  # "header:provider:<name>:<n>" fuer jede Anbieter-Kopfzeile, danach ein
+  # "model:<id>:1" je Mitglied) sowie die Anbieter-Anzahl in
+  # FAV_PROV_COUNT -- genau wie buildGroupedRows() es taete, wenn ALLE
+  # Gruppen (Favoriten und jeder Anbieter) aufgeklappt waeren.
+  build_favourite_rows_bash() {
+    FAV_PROV_COUNT=()
+    FAV_PROV_ORDER=()
+    FAV_ROWS=()
+    local spec id provider starred
+    local -A prov_members=()
+    local -a favourites=()
+
+    for spec in "$@"; do
+      IFS=':' read -r id provider starred <<< "$spec"
+      if [ -z "${FAV_PROV_COUNT[$provider]:-}" ]; then
+        FAV_PROV_COUNT[$provider]=0
+        FAV_PROV_ORDER+=("$provider")
+      fi
+      FAV_PROV_COUNT[$provider]=$(( ${FAV_PROV_COUNT[$provider]:-0} + 1 ))
+      prov_members[$provider]="${prov_members[$provider]:-}$id "
+      if [ "$starred" = "1" ]; then favourites+=("$id"); fi
+    done
+
+    if [ "${#favourites[@]}" -gt 0 ]; then
+      FAV_ROWS+=("header:favourites:${#favourites[@]}")
+      local fid
+      for fid in "${favourites[@]}"; do
+        FAV_ROWS+=("model:$fid:0")
+      done
+    fi
+
+    local p m
+    for p in "${FAV_PROV_ORDER[@]}"; do
+      FAV_ROWS+=("header:provider:$p:${FAV_PROV_COUNT[$p]}")
+      for m in ${prov_members[$p]}; do
+        FAV_ROWS+=("model:$m:1")
+      done
+    done
+  }
+
+  count_favourite_occurrences() {  # count_favourite_occurrences <id>
+    local id="$1" n=0 r
+    for r in "${FAV_ROWS[@]}"; do
+      case "$r" in "model:$id:"*) n=$((n + 1)) ;; esac
+    done
+    printf '%s' "$n"
+  }
+
+  # -- keine Sterne: keine Favoriten-Kopfzeile, Anbieter-Anzahlen wie
+  #    gehabt. --------------------------------------------------------
+  build_favourite_rows_bash "opencode/a:opencode:0" "lmstudio/x:lmstudio:0"
+  assert_eq "${FAV_ROWS[0]}" "header:provider:opencode:1"
+  no_fav_header="ja"
+  for r in "${FAV_ROWS[@]}"; do
+    case "$r" in header:favourites:*) no_fav_header="nein" ;; esac
+  done
+  assert_eq "$no_fav_header" "ja"
+  assert_eq "${FAV_PROV_COUNT[opencode]}" "1"
+  assert_eq "${FAV_PROV_COUNT[lmstudio]}" "1"
+
+  # -- ein Stern: Kopfzeile an Position 0 mit Anzahl 1; die Anbieter-
+  #    Anzahl bleibt bei 2 (nicht 1 -- das markierte Modell zaehlt
+  #    weiterhin mit); es erscheint zweimal (Favoriten + Anbietergruppe),
+  #    das unmarkierte Geschwistermodell nur einmal; die Favoriten-Zeile
+  #    traegt headerSegments 0. ------------------------------------------
+  build_favourite_rows_bash "opencode/a:opencode:1" "opencode/b:opencode:0" "lmstudio/x:lmstudio:0"
+  assert_eq "${FAV_ROWS[0]}" "header:favourites:1"
+  assert_eq "${FAV_PROV_COUNT[opencode]}" "2"
+  assert_eq "${FAV_PROV_COUNT[lmstudio]}" "1"
+  assert_eq "$(count_favourite_occurrences 'opencode/a')" "2"
+  assert_eq "$(count_favourite_occurrences 'opencode/b')" "1"
+  IFS=':' read -r hs_kind hs_id hs_segments <<< "${FAV_ROWS[1]}"
+  assert_eq "$hs_kind" "model"
+  assert_eq "$hs_id" "opencode/a"
+  assert_eq "$hs_segments" "0"
+
+  # -- zwei Sterne (in zwei verschiedenen Anbietern): Anzahl 2, BEIDE
+  #    Anbieter-Anzahlen bleiben unveraendert, BEIDE markierten Modelle
+  #    erscheinen je zweimal. --------------------------------------------
+  build_favourite_rows_bash "opencode/a:opencode:1" "opencode/b:opencode:0" \
+    "lmstudio/x:lmstudio:1" "lmstudio/y:lmstudio:0"
+  assert_eq "${FAV_ROWS[0]}" "header:favourites:2"
+  assert_eq "${FAV_PROV_COUNT[opencode]}" "2"
+  assert_eq "${FAV_PROV_COUNT[lmstudio]}" "2"
+  assert_eq "$(count_favourite_occurrences 'opencode/a')" "2"
+  assert_eq "$(count_favourite_occurrences 'lmstudio/x')" "2"
+  assert_eq "$(count_favourite_occurrences 'opencode/b')" "1"
+  assert_eq "$(count_favourite_occurrences 'lmstudio/y')" "1"
+}
+
+test_change1_anzahl_in_klammern() {
+  # Change 1: jede Kopfzeilen-Anzahl steht jetzt in Klammern, z.B.
+  # "opencode (64)" statt "opencode 64" -- rein darstellerisch, aendert
+  # weder buildGroupedRows() noch irgendeine Zaehlung. Zwei Pruefungen: die
+  # neue Klammer-Schreibweise ist vorhanden, UND die alte (Leerzeichen ohne
+  # Klammern) ist verschwunden -- ein Refactor, der
+  # '+ " (" + modelData.count + ")"' wieder durch '+ " " + modelData.count'
+  # ersetzt, faellt hier durch.
+  full="$(cat "$ROOT/ModelSheet.qml")"
+  assert_contains "$full" '+ " (" + modelData.count + ")"'
+  assert_not_contains "$full" '+ " " + modelData.count'
+}
+
+test_favoriten_wird_in_gruppierungsfunktion_gebaut_und_zuerst_platziert() {
+  # Change 2: die Favoriten-Gruppe muss INNERHALB von buildGroupedRows()
+  # entstehen (nicht als eigene Kopie in "visibleRows" daneben, derselbe
+  # Grundsatz wie bei der Untergruppen-Schwelle, siehe
+  # test_untergruppen_schwelle_lebt_in_gruppierungsfunktion oben) UND als
+  # ALLERERSTE Zeile -- vor der Anbieter-Schleife ("for (var g = 0; g <
+  # order.length; g++)").
+  body="$(sed -n '/^  function buildGroupedRows(models, expanded) {/,/^  }/p' "$ROOT/ModelSheet.qml")"
+  assert_contains "$body" 'kind: "header", favourites: true'
+
+  before_loop="$(printf '%s\n' "$body" | sed -n '/var rows = \[\]/,/for (var g = 0; g < order.length; g++) {/p')"
+  assert_contains "$before_loop" 'kind: "header", favourites: true'
+
+  vr="$(grep -A4 'readonly property var visibleRows:' "$ROOT/ModelSheet.qml")"
+  assert_not_contains "$vr" 'favourites: true'
+}
+
+test_favoriten_nur_bei_stern_und_anbieterzahl_bleibt_voll() {
+  # Regel "existiert nur bei mindestens einem Stern": das Gate
+  # "if (favourites.length > 0)" muss im Funktionskoerper stehen. Regel
+  # "Anbieterzahl aendert sich nicht": die Favoriten-Liste muss aus der
+  # VOLLEN, ungefilterten "models" gebaut werden ("models.filter(...)"),
+  # NICHT aus "buckets"/"order" -- und die Anbieter-Kopfzeile muss weiterhin
+  # "bucket.length" zeigen (die unveraenderte, bereits vor dieser Aenderung
+  # bestehende Zaehlung ueber ALLE Moditglieder des Anbieters).
+  body="$(sed -n '/^  function buildGroupedRows(models, expanded) {/,/^  }/p' "$ROOT/ModelSheet.qml")"
+  assert_contains "$body" 'if (favourites.length > 0) {'
+  assert_contains "$body" 'var favourites = models.filter(function (x) { return x.starred })'
+  assert_contains "$body" 'for (var i = 0; i < models.length; i++) {'
+  assert_contains "$body" 'count: bucket.length'
+}
+
+test_favoriten_zeilen_zeigen_volle_id_ohne_dritte_ebene() {
+  # Regel "volle ID, nichts abgeschnitten": die Favoriten-Modellzeile
+  # traegt headerSegments 0 (modelDisplayText() schneidet damit nichts ab,
+  # siehe dortiger Kommentar). Regel "keine dritte Ebene": dieselbe Zeile
+  # traegt indent 1 (nie 2) und keinen eigenen "subgroup"-Schluessel -- die
+  # woertliche Fundstelle deckt alle drei auf einmal ab, ein Aufweichen an
+  # irgendeiner der drei Stellen aendert die Zeile und faellt hier durch.
+  body="$(sed -n '/^  function buildGroupedRows(models, expanded) {/,/^  }/p' "$ROOT/ModelSheet.qml")"
+  assert_contains "$body" 'rows.push({ kind: "model", model: favourites[f], indent: 1, headerSegments: 0, favourites: true })'
+
+  # Die Kopfzeile selbst zeigt den Stern-Glyph (als \u-Escape) plus
+  # "Favourites" -- als woertliche Zeichenkette im Delegate, nicht
+  # errechnet aus einem Anbieter- oder Untergruppennamen.
+  full="$(cat "$ROOT/ModelSheet.qml")"
+  assert_contains "$full" '(modelData.favourites ? "\u2605 Favourites"'
+}
+
+test_favoriten_klappt_beim_oeffnen_immer_auf() {
+  # Regel "beim Oeffnen immer aufgeklappt, wenn sie existiert": ein
+  # zugeklapptes Favoriten-Kaestchen waere keine Abkuerzung. Die Zusicherung
+  # muss UNABHAENGIG von "currentModel" gelten -- die Zeile
+  # "sheet.expandedFavourites = hasStar" darf deshalb NICHT tiefer
+  # eingerueckt sein als "sheet.expandedProviders = expanded" (6
+  # Leerzeichen, direkt im "if (sheet.visible)"-Block). Eine Verschiebung
+  # in den "if (found)"- oder "if (sheet.currentModel !== \"\")"-Block waere
+  # 2 bzw. 4 Leerzeichen tiefer -- der ^...$-Anker (nicht nur "contains")
+  # ist hier bewusst noetig: eine 8-Leerzeichen-Zeile ENTHAELT als
+  # Teilkette auch 6 aufeinanderfolgende Leerzeichen vor dem Text, eine
+  # reine assert_contains wuerde die Verschiebung also NICHT bemerken.
+  indent_count="$(grep -c '^      sheet.expandedFavourites = hasStar$' "$ROOT/ModelSheet.qml")"
+  assert_eq "$indent_count" "1"
+
+  ov="$(sed -n '/^  onVisibleChanged: {/,/^  }/p' "$ROOT/ModelSheet.qml")"
+  assert_contains "$ov" 'if (sheet.models[si].starred) { hasStar = true; break }'
+
+  # Regel Cursor/Duplikat: ein gemerktes UND markiertes Modell steht jetzt
+  # zweimal in "rows" (Favoriten + Anbietergruppe) -- die Cursor-Suche muss
+  # weiterhin in der Anbietergruppe landen (bestehende Zusage bleibt
+  # woertlich bestehen), nicht in der fruehereren Favoriten-Kopie.
+  # Kommentarzeilen werden vorher ausgeschnitten: der Kommentar direkt
+  # darueber NENNT dieselbe Teilkette ("!rows[j].favourites"), um sie zu
+  # erklaeren -- eine ungefilterte Pruefung bliebe faelschlich gruen, wenn
+  # nur der CODE die Bedingung verliert, der Kommentar aber (der sie ja nur
+  # beschreibt) stehen bleibt. Gemessen an einer echten Probe: die
+  # Bedingung im Code entfernt, waehrend der erklaerende Kommentar
+  # unveraendert blieb, hielt die ungefilterte Fassung dieser Pruefung
+  # faelschlich gruen.
+  ov_code="$(printf '%s' "$ov" | grep -v '^[[:space:]]*//')"
+  assert_contains "$ov_code" '!rows[j].favourites'
+}
+
+test_favoriten_tastatur_und_klick_loesen_toggleFavourites_aus() {
+  # Regel "Tastaturverhalten wie jede andere Gruppe": Enter auf der
+  # Favoriten-Kopfzeile schaltet sie um (toggleFavourites), ebenso ein
+  # Klick -- exakt dieselben zwei Stellen, die auch toggleHeader() und
+  # toggleSubgroup() aufrufen (siehe test_enter_auf_kopfzeile_schaltet_um_
+  # statt_zu_waehlen oben).
+  full="$(cat "$ROOT/ModelSheet.qml")"
+  assert_contains "$full" 'if (row.favourites) sheet.toggleFavourites()'
+  assert_contains "$full" 'if (modelData.favourites) sheet.toggleFavourites()'
+
+  kp="$(grep -A10 'Keys.onReturnPressed' "$ROOT/ModelSheet.qml")"
+  assert_contains "$kp" 'sheet.toggleFavourites()'
+}
+
+test_modelsheet_frei_von_nicht_ascii_bytes() {
+  # Auftrags-Vorgabe: keine Nicht-ASCII-Bytes in QML -- der Stern-Glyph der
+  # Favoriten-Kopfzeile muss als \u-Escape stehen, wie jede Glyphe in
+  # diesem Projekt zuvor schon. Eine generelle Datei-weite Pruefung statt
+  # nur der einen Fundstelle, damit ein versehentlich literal eingefuegtes
+  # Sonderzeichen an JEDER Stelle auffliegt.
+  bad="$(LC_ALL=C grep -nP '[^\x00-\x7F]' "$ROOT/ModelSheet.qml" || true)"
+  assert_eq "$bad" ""
+}
+
 run_tests
