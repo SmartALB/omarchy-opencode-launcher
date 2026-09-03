@@ -852,12 +852,58 @@ Panel {
                   id: rowLine
                   width: parent.width
 
+                  // G9 (Fix Runde 2 -- Bindungsschleife im Shell-Log
+                  // gefunden, 369 Warnungen "Binding loop detected for
+                  // property text" nach dem Neustart der Shell): der
+                  // vorherige Kommentar an dieser Stelle argumentierte,
+                  // ein Schreibzugriff auf ein FREMDES Element (pathMetrics)
+                  // waehrend der Auswertung dieser "text"-Bindung sei
+                  // unbedenklich, weil es keine erneute Auswertung
+                  // DERSELBEN Bindung braucht. Das war falsch: fitPath()
+                  // schrieb pathMetrics.text und las danach
+                  // pathMetrics.advanceWidth -- der Lesezugriff macht
+                  // advanceWidth zu einer Abhaengigkeit DIESER "text"-
+                  // Bindung, und der vorangegangene Schreibzugriff
+                  // veraendert genau diese Abhaengigkeit WAEHREND die
+                  // Bindung noch laeuft. Das ist die Schleife, die Qt
+                  // gemeldet hat -- sie braucht keine Rekursion in dieselbe
+                  // Bindung, nur eine sich selbst aendernde Abhaengigkeit
+                  // waehrend der eigenen Auswertung. Und weil pathMetrics
+                  // EIN gemeinsames Element fuer alle Zeilen war, machte
+                  // der Schreibzugriff einer Zeile die Bindung JEDER
+                  // ANDEREN Zeile ungueltig -- daher 369 statt einer
+                  // Warnung.
+                  //
+                  // Behebung: die Messung findet nicht mehr INNERHALB
+                  // einer Bindung statt. "fittedPath" ist eine gewoehnliche
+                  // Eigenschaft (ein imperativ zugewiesener Wert, kein
+                  // Bindungsausdruck) -- refreshFittedPath() schreibt sie
+                  // aus einem Signal-Handler heraus (onWidthChanged,
+                  // Component.onCompleted), nie aus einer Bindung. Das
+                  // Label unten bindet an "rowLine.fittedPath", nicht mehr
+                  // an einen fitPath()-Aufruf selbst: "fittedPath" haengt
+                  // fuer die "text"-Bindung von nichts ab, das sich waehrend
+                  // ihrer eigenen Auswertung aendert, also gibt es keine
+                  // Schleife mehr. Schreibzugriffe auf das gemeinsame
+                  // pathMetrics bleiben unbedenklich, weil sie ausschliesslich
+                  // in refreshFittedPath() passieren -- also ausserhalb jeder
+                  // Bindung.
+                  property string fittedPath: ""
+
+                  function refreshFittedPath() {
+                    rowLine.fittedPath = root.fitPath(modelData.displayPath, rowLine.width - rowMarker.width, pathMetrics)
+                  }
+
+                  onWidthChanged: rowLine.refreshFittedPath()
+                  Component.onCompleted: rowLine.refreshFittedPath()
+
                   Text {
                     id: rowMarker
                     text: modelData.running ? "\u25CF  " : "\u25CB  "
                     color: root.barForeground
                     font.family: root.fontFam
                     font.pixelSize: Style.font.body
+                    onWidthChanged: rowLine.refreshFittedPath()
                   }
 
                   // G8: dieselbe Schrift wie das Label darunter -- eine
@@ -866,36 +912,18 @@ Panel {
                   // nichts zu tun hat, und fitPath() waehlt dann anhand
                   // einer bedeutungslosen Zahl. Rein rechnerisches Element
                   // ohne eigene Flaeche -- als Kind eines Row ohne Wirkung
-                  // auf dessen Layout.
+                  // auf dessen Layout. Ein einzelnes, geteiltes Element fuer
+                  // alle Zeilen ist hier unbedenklich (siehe G9 oben): es
+                  // wird nur noch ausserhalb jeder Bindung beschrieben.
                   TextMetrics {
                     id: pathMetrics
                     font.family: root.fontFam
                     font.pixelSize: Style.font.body
                   }
 
-                  // G8: dieselbe Breite ("rowLine.width - rowMarker.width")
-                  // geht zweimal in dieses Element ein -- einmal als
-                  // "width" unten, einmal als drittes Argument von
-                  // fitPath(). KEINE Bindungsschleife: beide lesen
-                  // ausschliesslich rowLine.width und rowMarker.width,
-                  // keines der beiden liest die "width" DIESES Elements
-                  // zurueck -- die Richtung "Text.width haengt von
-                  // rowLine.width ab" bleibt einseitig, es entsteht keine
-                  // Rueckrichtung "Text.width haengt von Text.text ab, der
-                  // wiederum von Text.width abhaengt". fitPath() selbst
-                  // schreibt zwar in pathMetrics.text (ein fremdes Element,
-                  // keine erneute Auswertung dieser "text"-Bindung), aber
-                  // der Lesezugriff auf pathMetrics.advanceWidth macht
-                  // advanceWidth zu einer Abhaengigkeit dieser Bindung --
-                  // ein zusaetzlicher, konvergierender Nachlauf ist deshalb
-                  // moeglich (siehe Abschlussbericht fuer das, was der
-                  // Shell-Log dazu tatsaechlich zeigte), eine echte, sich
-                  // selbst aufschaukelnde Schleife waere nur moeglich, wenn
-                  // diese "text"-Bindung selbst erneut gelesen wuerde --
-                  // was hier nirgends geschieht.
                   Text {
                     width: rowLine.width - rowMarker.width
-                    text: (modelData.name !== modelData.displayPath ? modelData.name : root.fitPath(modelData.displayPath, rowLine.width - rowMarker.width, pathMetrics))
+                    text: (modelData.name !== modelData.displayPath ? modelData.name : rowLine.fittedPath)
                     color: root.barForeground
                     font.family: root.fontFam
                     font.pixelSize: Style.font.body

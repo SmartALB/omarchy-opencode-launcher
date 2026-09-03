@@ -180,14 +180,29 @@ test_displayPath_erscheint_hoechstens_einmal() {
   # G5 (Panel-Redesign): die Projektzeile zeigte bisher Name und
   # displayPath als zwei uebereinanderstehende Zeilen -- fuer jedes
   # automatisch aufgenommene Projekt derselbe Text zweimal. Jetzt gibt es
-  # nur noch die eine Namenszeile, die "displayPath" genau EINMAL nennt
-  # (die Unterscheidung "echter Name oder abgekuerzter Pfad"). Ein
-  # spaeterer Refactor, der die zweite Zeile stillschweigend wieder
-  # einfuehrt, fuegt zwangslaeufig eine ZWEITE Fundstelle hinzu -- diese
-  # Regel zaehlt Zeilen, nicht Vorkommen, weil die eine legitime Zeile den
-  # Bezeichner selbst zweimal traegt (Vergleich und Rueckfallzweig).
-  count="$(grep -c 'displayPath' "$ROOT/Panel.qml")"
-  assert_eq "$count" "1"
+  # nur noch die eine Namenszeile, die "modelData.name !==
+  # modelData.displayPath" genau EINMAL nennt (die Unterscheidung "echter
+  # Name oder abgekuerzter Pfad"). Ein spaeterer Refactor, der die zweite
+  # Zeile stillschweigend wieder einfuehrt, fuegt zwangslaeufig eine ZWEITE
+  # Fundstelle dieser Vergleichs-Teilkette hinzu.
+  #
+  # Angepasst nach G9 (Fix Runde 2, Bindungsschleife): die urspruengliche
+  # Fassung zaehlte jedes Vorkommen von "displayPath" und verlangte genau
+  # eines. Seit G9 braucht refreshFittedPath() modelData.displayPath ein
+  # zweites Mal, um fittedPath IMPERATIV (ausserhalb jeder Bindung) zu
+  # berechnen -- das ist keine zweite sichtbare Namenszeile, sondern reine
+  # Berechnung, und die alte Fassung dieser Regel haette das faelschlich
+  # als Ruecksturz auf den G5-Fehler gemeldet. Die eigentliche Schutzregel
+  # bleibt bestehen, jetzt aber ueber die spezifischere Teilkette
+  # "modelData.name !== modelData.displayPath", die nur in genau der einen
+  # sichtbaren Namenszeile stehen darf; der Gesamtzaehler bleibt zusaetzlich
+  # auf den aktuell bekannten Wert (2) festgenagelt, damit eine dritte,
+  # unbeabsichtigte Fundstelle ebenfalls auffiele.
+  cmp_count="$(grep -c 'modelData.name !== modelData.displayPath' "$ROOT/Panel.qml")"
+  assert_eq "$cmp_count" "1"
+
+  total_count="$(grep -c 'displayPath' "$ROOT/Panel.qml")"
+  assert_eq "$total_count" "2"
 }
 
 test_projektzeile_elidiert_links() {
@@ -203,30 +218,88 @@ test_pfad_fallback_wird_gekuerzt() {
   # der Pfad-Fallback in der Namenszeile (der Zweig OHNE echten Namen) lief
   # bis zu diesem Fix durch root.shortPath() direkt und verliess sich fuer
   # eine zu schmale Zeile allein auf ElideLeft, das mitten in einem Segment
-  # abschneiden konnte. Jetzt laeuft er durch root.fitPath(), das aus
-  # root.pathCandidates() (drei/zwei/ein Segment, siehe
-  # test_pfadleiter_kandidaten unten) die breiteste noch passende
-  # Kandidatin waehlt. shortPath(p) selbst bleibt trotzdem als eigene,
-  # oeffentliche Funktion bestehen -- pathCandidates() ruft fuer die
-  # Rechenregel intern segmentsAtMost(p, n) auf, nicht mehr shortPath()
-  # selbst, aber die Funktionssignatur ist Teil des in G6 dokumentierten
-  # Vertrags und bleibt Pruefgegenstand. Drei Pruefungen, damit ein
-  # Umgehen an keiner der moeglichen Stellen unbemerkt bleibt:
-  #   1) die Bindung selbst muss root.fitPath(modelData.displayPath, ...)
-  #      aufrufen (ein Bypass, der wieder direkt root.shortPath(...) oder
-  #      das nackte modelData.displayPath einsetzt, faellt hier durch)
+  # abschneiden konnte. Jetzt laeuft er ueber root.fitPath() (aus
+  # root.pathCandidates(), drei/zwei/ein Segment, siehe
+  # test_pfadleiter_kandidaten unten), das die breiteste noch passende
+  # Kandidatin waehlt.
+  #
+  # Angepasst nach G9 (Fix Runde 2, Bindungsschleife im Shell-Log
+  # gefunden): fitPath() wird nicht mehr direkt aus der "text"-Bindung
+  # heraus aufgerufen (das schrieb pathMetrics.text und las
+  # pathMetrics.advanceWidth INNERHALB derselben Bindung -- eine echte
+  # Bindungsschleife, siehe test_fitpath_nicht_innerhalb_der_bindung
+  # unten), sondern aus refreshFittedPath() heraus, imperativ ausgeloest
+  # ueber onWidthChanged/Component.onCompleted. Die Bindung selbst liest
+  # nur noch die gewoehnliche Eigenschaft "rowLine.fittedPath". shortPath(p)
+  # selbst bleibt trotzdem als eigene, oeffentliche Funktion bestehen --
+  # pathCandidates() ruft fuer die Rechenregel intern segmentsAtMost(p, n)
+  # auf, nicht mehr shortPath() selbst, aber die Funktionssignatur ist Teil
+  # des in G6 dokumentierten Vertrags und bleibt Pruefgegenstand. Vier
+  # Pruefungen, damit ein Umgehen an keiner der moeglichen Stellen
+  # unbemerkt bleibt:
+  #   1) die sichtbare Bindung selbst muss "rowLine.fittedPath" verwenden
+  #      (ein Bypass, der wieder direkt root.shortPath(...) oder das
+  #      nackte modelData.displayPath einsetzt, faellt hier durch)
   #   2) die Funktion fitPath(p, availableWidth, metrics) muss ueberhaupt
   #      definiert sein (nach Funktions-SIGNATUR gesucht, nicht nur nach
   #      dem Namen)
   #   3) die Funktion shortPath(p) muss weiterhin definiert sein
+  #   4) refreshFittedPath() muss ueberhaupt definiert sein und den
+  #      fitPath()-Aufruf tragen, der fittedPath tatsaechlich fuellt
   out="$(grep -A6 'modelData.name !== modelData.displayPath' "$ROOT/Panel.qml")"
-  assert_contains "$out" "root.fitPath(modelData.displayPath, rowLine.width - rowMarker.width, pathMetrics)"
+  assert_contains "$out" "rowLine.fittedPath"
 
   fit_count="$(grep -c 'function fitPath(p, availableWidth, metrics)' "$ROOT/Panel.qml")"
   assert_eq "$fit_count" "1"
 
   def_count="$(grep -c 'function shortPath(p)' "$ROOT/Panel.qml")"
   assert_eq "$def_count" "1"
+
+  refresh="$(grep -A2 'function refreshFittedPath()' "$ROOT/Panel.qml")"
+  assert_contains "$refresh" "rowLine.fittedPath = root.fitPath(modelData.displayPath, rowLine.width - rowMarker.width, pathMetrics)"
+}
+
+test_fitpath_nicht_innerhalb_der_bindung() {
+  # G9 (Fix Runde 2): der eigentliche Fehler, den der Shell-Log nach dem
+  # Neustart aufdeckte (369x "Binding loop detected for property text").
+  # fitPath() schreibt pathMetrics.text und liest danach
+  # pathMetrics.advanceWidth -- lief das INNERHALB der "text"-Bindung des
+  # Labels selbst ab, machte der Lesezugriff auf advanceWidth diesen Wert
+  # zu einer Abhaengigkeit GENAU DIESER Bindung, waehrend der vorangehende
+  # Schreibzugriff sie zur Laufzeit der eigenen Auswertung veraenderte --
+  # das ist die Schleife, unabhaengig davon, ob die Bindung sich dabei
+  # jemals selbst rekursiv aufruft. Und weil pathMetrics EIN gemeinsames
+  # Element fuer alle Projektzeilen ist, machte der Schreibzugriff einer
+  # Zeile die Bindung JEDER ANDEREN Zeile ungueltig -- daher 369 statt
+  # einer Warnung.
+  #
+  # Die Behebung: die Messung (root.fitPath(...)) darf nirgends mehr
+  # innerhalb einer Eigenschafts-BINDUNG stehen, nur noch innerhalb einer
+  # Funktion, die aus einem SIGNAL-HANDLER heraus aufgerufen wird
+  # (onWidthChanged, Component.onCompleted) -- ein Signal-Handler ist
+  # imperativer Code, keine Bindung, und loest deshalb keine erneute
+  # Bindungsauswertung waehrend seiner eigenen Ausfuehrung aus. Drei
+  # Pruefungen:
+  #   1) die sichtbare "text"-Bindung des Labels darf root.fitPath NICHT
+  #      selbst aufrufen (der Rueckfall auf die alte, fehlerhafte Fassung
+  #      faellt hier durch)
+  #   2) es muss eine gewoehnliche Eigenschaft "fittedPath" auf rowLine
+  #      geben, an die die Bindung stattdessen bindet
+  #   3) refreshFittedPath() muss ueber mindestens einen Signal-Handler
+  #      (onWidthChanged oder Component.onCompleted) tatsaechlich
+  #      aufgerufen werden -- eine Funktion, die nur definiert, aber nie
+  #      aufgerufen wird, wuerde fittedPath nie befuellen und faellt in der
+  #      Praxis durch eine leere Projektzeile auf, aber nicht durch diese
+  #      Textregel; diese dritte Pruefung schliesst genau diese Luecke
+  block="$(sed -n '/id: rowLine/,/^                }/p' "$ROOT/Panel.qml")"
+
+  out="$(grep -A6 'modelData.name !== modelData.displayPath' "$ROOT/Panel.qml")"
+  assert_not_contains "$out" "root.fitPath("
+
+  assert_contains "$block" "property string fittedPath"
+
+  calls="$(printf '%s' "$block" | grep -cE '(onWidthChanged|Component\.onCompleted):[[:space:]]*rowLine\.refreshFittedPath\(\)')"
+  assert_ne "$calls" "0"
 }
 
 test_shortpath_segmentarithmetik() {
