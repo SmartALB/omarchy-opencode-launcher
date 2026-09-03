@@ -575,8 +575,9 @@ Panel {
   }
 
   // iconRow statt eines einzelnen anchors.fill-Buttons: BarIconButton kann
-  // Icon und Text nicht zugleich zeigen (siehe zwei Schwesterwidgets fuer
-  // dieselbe Erkenntnis), UND sein fixedWidth ist fest auf slotSize genagelt
+  // Icon und Text nicht zugleich zeigen -- eine Erkenntnis, die schon zwei
+  // Schwesterwidgets denselben Umbau gekostet hat --, UND sein fixedWidth
+  // ist fest auf slotSize genagelt
   // -- ein an "text" angehaengter Zaehler wuerde also nie Platz bekommen und
   // liefe bestenfalls unsichtbar, schlimmstenfalls abgeschnitten mit
   // benachbarten Widgets ueberlappend. Der Zaehler ist deshalb ein eigenes
