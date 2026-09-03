@@ -198,4 +198,68 @@ test_projektzeile_elidiert_links() {
   assert_contains "$out" "Text.ElideLeft"
 }
 
+test_pfad_fallback_wird_gekuerzt() {
+  # G6: der Pfad-Fallback in der Namenszeile (der Zweig OHNE echten Namen)
+  # muss auf die letzten drei Segmente gekuerzt sein -- nicht der rohe,
+  # ungekuerzte displayPath. Zwei Pruefungen, damit ein Umgehen an beiden
+  # moeglichen Stellen auffliegt:
+  #   1) die Bindung selbst muss root.shortPath(modelData.displayPath)
+  #      aufrufen (ein Bypass, der wieder das nackte modelData.displayPath
+  #      einsetzt, faellt hier durch)
+  #   2) die Funktion shortPath(p) muss ueberhaupt definiert sein (ein
+  #      Loeschen der Funktion, bei dem irgendwo noch "shortPath" als Text
+  #      auftaucht, faellt hier durch, weil hier nach der Funktions-
+  #      SIGNATUR gesucht wird, nicht nur nach dem Namen)
+  out="$(grep -A6 'modelData.name !== modelData.displayPath' "$ROOT/Panel.qml")"
+  assert_contains "$out" "root.shortPath(modelData.displayPath)"
+
+  def_count="$(grep -c 'function shortPath(p)' "$ROOT/Panel.qml")"
+  assert_eq "$def_count" "1"
+}
+
+test_shortpath_segmentarithmetik() {
+  # shortPath() in Panel.qml ist reine String-Arithmetik ohne Datei-IO:
+  # Segmente an "/" zaehlen, das fuehrende "~" zaehlt mit, ab mehr als drei
+  # Segmenten ueberleben nur die letzten drei, mit "…/" davor.
+  #
+  # ACHTUNG (ehrlich, nicht schoengeredet): dies ist KEIN Aufruf der
+  # echten QML-Funktion. Panel.qml importiert Quickshell.Io und
+  # qs.Commons/qs.Ui, die ausserhalb der laufenden Omarchy-Shell nicht
+  # aufloesbar sind -- weder "qml" (Qt6) noch irgendein anderes Werkzeug
+  # in dieser Sandbox kann die Datei isoliert ausfuehren. Was hier steht,
+  # ist eine PARALLELE Nachrechnung derselben Segment-Arithmetik in Bash,
+  # gegen dieselben Beispiele wie in der Aufgabenstellung. Sie deckt die
+  # Rechenregel ab (Segmentzahl, Grenzfall <=3, welche drei ueberleben,
+  # der abgeschnittene schliessende Slash) -- nicht den tatsaechlich in
+  # Panel.qml ausgefuehrten Bytecode. Eine Aenderung an shortPath(), die
+  # diese Rechenregel nicht mitaendert, bleibt fuer DIESEN Test unsichtbar;
+  # die Textregel oben (test_pfad_fallback_wird_gekuerzt) plus qmllint
+  # plus die visuelle Kontrolle im Panel schliessen diese Luecke.
+  ellipsis="$(printf '…')"
+
+  short_path_bash() {
+    local p="$1" s
+    if [ "${#p}" -gt 1 ] && [ "${p: -1}" = "/" ]; then s="${p%/}"; else s="$p"; fi
+    local segs=()
+    IFS='/' read -ra segs <<< "$s"
+    local n="${#segs[@]}"
+    if [ "$n" -le 3 ]; then printf '%s' "$p"; return 0; fi
+    local start=$((n - 3))
+    local last3=("${segs[@]:$start:3}")
+    local joined
+    joined="$(IFS=/; printf '%s' "${last3[*]}")"
+    printf '%s/%s' "$ellipsis" "$joined"
+  }
+
+  assert_eq "$(short_path_bash '~')" "~"
+  assert_eq "$(short_path_bash '~/.config')" "~/.config"
+  assert_eq "$(short_path_bash '~/Development/Sources/Extern/shannon')" \
+    "${ellipsis}/Sources/Extern/shannon"
+  assert_eq "$(short_path_bash '/srv/work/api')" "${ellipsis}/srv/work/api"
+  # Schliessender Slash -> leeres letztes Segment; muss dasselbe liefern
+  # wie ohne den Slash (der abgeschnittene Fall aus dem Kommentar oben).
+  assert_eq "$(short_path_bash '~/Development/Sources/Extern/shannon/')" \
+    "${ellipsis}/Sources/Extern/shannon"
+}
+
 run_tests

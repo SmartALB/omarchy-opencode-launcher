@@ -166,6 +166,38 @@ Panel {
     return isFinite(n) ? n : fallback
   }
 
+  // G6: die Namenszeile zeigt fuer Projekte ohne echten Namen den
+  // abgekuerzten Pfad -- der konnte trotzdem so lang werden, dass
+  // ElideLeft (unten am Text) fast staendig zuschlug. shortPath() kuerzt
+  // schon vorher auf die letzten drei Segmente; ElideLeft bleibt als
+  // zweites Netz fuer den Fall, dass selbst drei Segmente die Zeile noch
+  // sprengen. Ein Segment ist ein "/"-getrennter Teil, das fuehrende "~"
+  // zaehlt als eines mit -- "~/a/b/c/d" hat fuenf, die letzten drei
+  // ueberleben. Ein echter Name (siehe Aufrufstelle) laeuft NIE hier
+  // durch: der wird nie gekuerzt. Das Auslassungszeichen steht als
+  // \u-Escape im Code (nicht als rohes Byte): dieses Projekt verbietet
+  // Nicht-ASCII-Bytes in QML.
+  //
+  // Absoluter Pfad ohne Tilde ("/srv/work/api"): der erste "/" erzeugt
+  // beim Split ein leeres Fuehrungssegment, das nach Regel 1 mitzaehlt
+  // ("/srv/work/api" hat vier Segmente). Sichtbar wird dieses leere
+  // Segment nie: slice(-3) nimmt ohnehin nur die letzten drei echten
+  // Teile, und nur wenn segs.length <= 3 ist (das leere Segment selbst
+  // unter den letzten drei), greift der fruehe Rueckgabezweig und liefert
+  // den Pfad unveraendert -- dann bleibt genau ein Schraegstrich vorn
+  // stehen, nie zwei hintereinander nach dem Auslassungspraefix.
+  //
+  // Ein schliessender Schraegstrich ("a/b/c/") wuerde ein leeres LETZTES
+  // Segment erzeugen; das Feld aus dem Skript kommt nie so an, aber die
+  // Funktion bleibt robust und schneidet einen einzelnen schliessenden
+  // Slash vor dem Split ab, damit kein leeres Segment mitzaehlt.
+  function shortPath(p) {
+    var s = (p.length > 1 && p.endsWith("/")) ? p.slice(0, -1) : p
+    var segs = s.split("/")
+    if (segs.length <= 3) return p
+    return "\u2026/" + segs.slice(-3).join("/")
+  }
+
   readonly property string barLabelMode: String(root.setting("barLabel", "Icon"))
 
   // Anzahl der laufenden opencode-Fenster, fuer den "Running count"-Modus.
@@ -734,15 +766,19 @@ Panel {
                 // Skript setzt "name" nur dann auf den abgekuerzten Pfad,
                 // wenn die Config keinen eigenen Namen liefert. Jetzt gibt
                 // es nur noch diese eine Zeile: einen echten Namen (kurz,
-                // elidiert praktisch nie) oder, wenn keiner da ist, den
-                // abgekuerzten Pfad. ElideLeft statt ElideRight, damit bei
-                // langen Pfaden das ENDE erhalten bleibt (der aussagekraeftige
-                // Teil) und die Ellipse vorne sitzt; der volle, absolute Pfad
-                // (nicht die Tilde-Form) steht im Hover-Tooltip auf rowMouse.
+                // elidiert praktisch nie, NIE gekuerzt) oder, wenn keiner
+                // da ist, der Pfad-Fallback -- der laeuft durch
+                // root.shortPath() (siehe dort) und zeigt hoechstens die
+                // letzten drei Segmente. ElideLeft bleibt zusaetzlich
+                // stehen (statt ElideRight), damit bei einem selbst dann
+                // noch zu breiten Rest das ENDE erhalten bleibt (der
+                // aussagekraeftige Teil) und die Ellipse vorne sitzt; der
+                // volle, absolute Pfad (nicht die Tilde-Form, nicht
+                // gekuerzt) steht im Hover-Tooltip auf rowMouse.
                 Text {
                   width: parent.width
                   text: (modelData.running ? "\u25CF  " : "\u25CB  ")
-                    + (modelData.name !== modelData.displayPath ? modelData.name : modelData.displayPath)
+                    + (modelData.name !== modelData.displayPath ? modelData.name : root.shortPath(modelData.displayPath))
                   color: root.barForeground
                   font.family: root.fontFam
                   font.pixelSize: Style.font.body
