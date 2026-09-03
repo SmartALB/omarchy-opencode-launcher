@@ -423,8 +423,15 @@ Panel {
     modelsProc.running = true
   }
 
-  function openSheetFor(path) {
+  // G7 (Gruppierung nach Anbieter im Picker): "modelId" ist das fuer DIESES
+  // Projekt gemerkte Modell (modelData.model an der Aufrufstelle, leer/
+  // undefined, wenn keines gemerkt ist) -- der Picker selbst kennt den
+  // aktuellen Stand nicht, er bekommt ihn hier gereicht. sheet.
+  // onVisibleChanged (siehe ModelSheet.qml) klappt daraus genau die Gruppe
+  // auf, die dieses Modell traegt.
+  function openSheetFor(path, modelId) {
     root.sheetPath = path
+    sheet.currentModel = modelId || ""
     if (root.models.length === 0) modelsProc.running = true
     sheet.visible = true
   }
@@ -620,7 +627,7 @@ Panel {
         }
         else if (e.key === Qt.Key_M) {
           root.disarmConfirm()
-          if (list[root.cursor]) root.openSheetFor(list[root.cursor].path); e.accepted = true
+          if (list[root.cursor]) root.openSheetFor(list[root.cursor].path, list[root.cursor].model); e.accepted = true
         }
         else if (e.key === Qt.Key_R) { root.disarmConfirm(); root.refreshAll(); e.accepted = true }
         else if (e.key === Qt.Key_Escape) {
@@ -857,7 +864,7 @@ Panel {
                   onClicked: {
                     root.disarmConfirm()
                     root.cursor = index
-                    root.openSheetFor(modelData.path)
+                    root.openSheetFor(modelData.path, modelData.model)
                   }
                 }
               }
@@ -873,7 +880,7 @@ Panel {
                 onClicked: function (e) {
                   root.disarmConfirm()
                   root.cursor = index
-                  if (e.button === Qt.RightButton) root.openSheetFor(modelData.path)
+                  if (e.button === Qt.RightButton) root.openSheetFor(modelData.path, modelData.model)
                   else if (modelData.exists) root.openProject(modelData, false)
                 }
               }

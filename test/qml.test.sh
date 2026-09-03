@@ -276,4 +276,122 @@ test_laufanzeige_steht_nicht_im_elidierten_text() {
   assert_contains "$block" '\u25CF'
 }
 
+test_gruppierungsfunktion_definiert_und_von_liste_aufgerufen() {
+  # G7 (Gruppierung nach Anbieter): buildGroupedRows() ist die benannte
+  # Funktion, an der sich diese Regel festhaelt -- wie shortPath() in
+  # Panel.qml (siehe test_pfad_fallback_wird_gekuerzt). Zwei Pruefungen,
+  # damit ein Umgehen an beiden moeglichen Stellen auffliegt:
+  #   1) die Funktion muss ueberhaupt (genau einmal) definiert sein
+  #   2) die Zeilenliste ("model:" der ListView) muss an "visibleRows"
+  #      gebunden sein, und "visibleRows" selbst muss buildGroupedRows()
+  #      AUFRUFEN -- ein Umbau, der die Funktion zwar behaelt, sie aber aus
+  #      visibleRows entfernt (z.B. durch eine eigene, kopierte Schleife),
+  #      faellt hier durch, obwohl die Funktion selbst weiter existiert.
+  def_count="$(grep -c 'function buildGroupedRows(models, expanded)' "$ROOT/ModelSheet.qml")"
+  assert_eq "$def_count" "1"
+
+  bound="$(grep -c 'model: sheet.visibleRows' "$ROOT/ModelSheet.qml")"
+  assert_eq "$bound" "1"
+
+  vr="$(grep -A4 'readonly property var visibleRows:' "$ROOT/ModelSheet.qml")"
+  assert_contains "$vr" "sheet.buildGroupedRows("
+}
+
+test_suche_ueberspringt_gruppierung() {
+  # Sobald das Suchfeld nicht leer ist ("filter" != "", "grouped" wird
+  # false), muss "visibleRows" OHNE buildGroupedRows() auskommen -- die
+  # Suche zeigt die flache Trefferliste ohne Kopfzeilen (jede Zeile
+  # "kind: model"), exakt wie vor der Gruppierung.
+  g="$(grep -A1 'readonly property bool grouped:' "$ROOT/ModelSheet.qml")"
+  assert_contains "$g" 'sheet.filter === ""'
+
+  vr="$(grep -A4 'readonly property var visibleRows:' "$ROOT/ModelSheet.qml")"
+  assert_contains "$vr" "sheet.grouped"
+  assert_contains "$vr" "sheet.shown.map("
+  assert_contains "$vr" '"model"'
+}
+
+test_enter_auf_kopfzeile_schaltet_um_statt_zu_waehlen() {
+  # G7: Enter auf einer Kopfzeile klappt sie auf/zu (toggleHeader);
+  # Enter auf einer Modellzeile waehlt sie (picked). Beide Zweige muessen
+  # im selben Keys.onReturnPressed stehen -- ein Umbau, der "picked" auch
+  # fuer Kopfzeilen aufruft (oder "toggleHeader" ganz entfernt), faellt hier
+  # durch.
+  out="$(grep -A10 'Keys.onReturnPressed' "$ROOT/ModelSheet.qml")"
+  assert_contains "$out" 'row.kind === "header"'
+  assert_contains "$out" 'sheet.toggleHeader(row.provider)'
+  assert_contains "$out" 'sheet.picked(row.model.id)'
+}
+
+test_gruppierung_arithmetik_erstauftreten_und_sterne() {
+  # ACHTUNG (ehrlich, nicht schoengeredet): dies ist KEIN Aufruf der echten
+  # QML-Funktion buildGroupedRows() aus ModelSheet.qml. ModelSheet.qml
+  # importiert qs.Commons/qs.Ui, die ausserhalb der laufenden Omarchy-Shell
+  # nicht aufloesbar sind -- dieselbe Einschraenkung wie bei
+  # test_shortpath_segmentarithmetik oben, aus demselben Grund (siehe dort).
+  # Was hier steht, ist eine PARALLELE Nachrechnung derselben Arithmetik in
+  # Bash: Gruppenreihenfolge nach dem ERSTEN Auftreten des Anbieters in der
+  # (absichtlich mit Anbietern durchmischten) Eingabe, die Anzahl je Gruppe,
+  # und innerhalb einer Gruppe eine stabile Zweiteilung (erst alle
+  # markierten in ihrer bisherigen Reihenfolge, dann alle unmarkierten in
+  # ihrer bisherigen Reihenfolge). Sie deckt die Rechenregel ab -- nicht den
+  # tatsaechlich in ModelSheet.qml ausgefuehrten Bytecode. Eine Aenderung an
+  # buildGroupedRows(), die diese Rechenregel nicht mitaendert, bleibt fuer
+  # DIESEN Test unsichtbar; die drei Textregeln oben plus qmllint plus die
+  # visuelle Kontrolle im Panel schliessen diese Luecke.
+  declare -A seen=()
+  order=()
+  declare -A starred_ids=()
+  declare -A unstarred_ids=()
+  declare -A counts=()
+
+  add_model() {  # add_model <id> <provider> <starred:0|1>
+    local id="$1" provider="$2" starred="$3"
+    if [ -z "${seen[$provider]:-}" ]; then
+      seen[$provider]=1
+      order+=("$provider")
+    fi
+    counts[$provider]=$(( ${counts[$provider]:-0} + 1 ))
+    if [ "$starred" = "1" ]; then
+      starred_ids[$provider]="${starred_ids[$provider]:-} $id"
+    else
+      unstarred_ids[$provider]="${unstarred_ids[$provider]:-} $id"
+    fi
+  }
+
+  # Eingabe bewusst interleaved (nicht nach Anbieter sortiert) und mit
+  # einem Stern MITTEN in einer sonst unmarkierten Gruppe -- genau der
+  # Fall, den eine simple "die Liste kam schon vorsortiert an"-Annahme
+  # uebersehen wuerde.
+  add_model "opencode/a" opencode 0
+  add_model "lmstudio/x" lmstudio 0
+  add_model "opencode/b" opencode 1
+  add_model "openai/gpt" openai 0
+  add_model "lmstudio/y" lmstudio 1
+  add_model "opencode/c" opencode 0
+
+  # Gruppenreihenfolge: opencode zuerst (sein erstes Modell steht insgesamt
+  # zuerst), dann lmstudio, dann openai -- unabhaengig von Sternen oder
+  # Gruppengroesse.
+  assert_eq "${order[*]}" "opencode lmstudio openai"
+
+  # Anzahl je Gruppe.
+  assert_eq "${counts[opencode]}" "3"
+  assert_eq "${counts[lmstudio]}" "2"
+  assert_eq "${counts[openai]}" "1"
+
+  # Innerhalb "opencode": b ist markiert, a und c nicht -- b muss VOR a und
+  # c stehen; a und c behalten ihre relative Reihenfolge (a vor c).
+  assert_eq "${starred_ids[opencode]}${unstarred_ids[opencode]}" \
+    " opencode/b opencode/a opencode/c"
+
+  # Innerhalb "lmstudio": y ist markiert, x nicht -- y vor x.
+  assert_eq "${starred_ids[lmstudio]}${unstarred_ids[lmstudio]}" " lmstudio/y lmstudio/x"
+
+  # "openai" hat keinen Stern -- die Gruppe bleibt einfach in ihrer
+  # Reihenfolge.
+  assert_eq "${unstarred_ids[openai]}" " openai/gpt"
+  assert_eq "${starred_ids[openai]:-}" ""
+}
+
 run_tests

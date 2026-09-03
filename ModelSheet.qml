@@ -40,6 +40,12 @@ Item {
   property int cursor: 0
   property color fg: Color.foreground
   property string fontFam: Style.font.family
+  // G7 (Gruppierung nach Anbieter): das Panel setzt diese Eigenschaft beim
+  // Oeffnen auf das fuer das aktuelle Projekt gemerkte Modell (leer, wenn
+  // keines gemerkt ist). Der Picker kannte den aktuellen Stand bisher gar
+  // nicht -- ohne ihn koennte "genau die Gruppe mit dem gemerkten Modell
+  // aufklappen" nicht entschieden werden.
+  property string currentModel: ""
 
   signal picked(string id)
   signal cleared()
@@ -53,9 +59,89 @@ Item {
       return String(m.id).toLowerCase().indexOf(f) !== -1
     })
   }
-  // Die Cursor-Position darf nie ausserhalb der (sich mit jedem Tastendruck
-  // im Suchfeld aendernden) gefilterten Liste stehen.
-  onShownChanged: sheet.cursor = Math.max(0, Math.min(sheet.cursor, sheet.shown.length - 1))
+
+  // G7: welche Anbieter-Gruppen gerade aufgeklappt sind, als einfaches
+  // Objekt provider -> true. Ein Objekt statt eines Arrays, weil das
+  // Nachschlagen "ist dieser Anbieter aufgeklappt" so ein einzelner
+  // Property-Zugriff bleibt, nicht ein Array-Scan pro Kopfzeile.
+  property var expandedProviders: ({})
+
+  function toggleHeader(provider) {
+    var next = {}
+    for (var k in sheet.expandedProviders) next[k] = sheet.expandedProviders[k]
+    next[provider] = !next[provider]
+    sheet.expandedProviders = next
+  }
+
+  // G7: die Gruppierung als benannte Funktion (wie shortPath() in
+  // Panel.qml), damit eine Textregel in test/qml.test.sh sich daran
+  // festhalten kann. Reine Arithmetik ohne Datei-IO, wie shortPath():
+  //
+  // - Gruppenreihenfolge = Reihenfolge des ERSTEN Auftretens jedes
+  //   Anbieters in "models". "models" traegt bereits die von opencode
+  //   gelieferte Reihenfolge (bin/omarchy-opencode-models sortiert bewusst
+  //   NUR nach "starred", siehe Kommentar dort -- ein zweites Kriterium
+  //   wuerde genau diese Reihenfolge zerstoeren). Diese Funktion fuegt
+  //   KEINE zweite Sortierung ueber die Gruppen hinweg hinzu: sie merkt
+  //   sich nur, in welcher Reihenfolge neue Anbieter zum ersten Mal
+  //   auftauchen.
+  // - Innerhalb einer Gruppe kommen die markierten (starred) Modelle
+  //   zuerst -- eine stabile Zweiteilung (erst alle markierten in ihrer
+  //   bisherigen Reihenfolge, dann alle unmarkierten in ihrer bisherigen
+  //   Reihenfolge), kein zusaetzliches Sortierkriterium. Das gilt
+  //   unabhaengig davon, ob die Liste schon global vorsortiert ankommt --
+  //   die Funktion verlaesst sich nicht auf eine Eigenschaft ihres
+  //   Aufrufers.
+  // - Eine Kopfzeile je Gruppe ({kind:"header", provider, count,
+  //   expanded}), gefolgt von den Modellzeilen ({kind:"model", model:m})
+  //   NUR wenn die Gruppe aufgeklappt ist.
+  function buildGroupedRows(models, expanded) {
+    var order = []
+    var buckets = {}
+    for (var i = 0; i < models.length; i++) {
+      var m = models[i]
+      if (!buckets[m.provider]) { buckets[m.provider] = []; order.push(m.provider) }
+      buckets[m.provider].push(m)
+    }
+    var rows = []
+    for (var g = 0; g < order.length; g++) {
+      var provider = order[g]
+      var bucket = buckets[provider]
+      var starredFirst = bucket.filter(function (x) { return x.starred })
+        .concat(bucket.filter(function (x) { return !x.starred }))
+      var isOpen = !!(expanded && expanded[provider])
+      rows.push({ kind: "header", provider: provider, count: bucket.length, expanded: isOpen })
+      if (isOpen) {
+        for (var j = 0; j < starredFirst.length; j++) rows.push({ kind: "model", model: starredFirst[j] })
+      }
+    }
+    return rows
+  }
+
+  // G7: solange gesucht wird, verschwinden Kopfzeilen und Einrueckung --
+  // der Picker verhaelt sich dann exakt wie vorher (flache Liste,
+  // Freitext-Eingabe bei keinem Treffer). "grouped" haelt fest, WELCHER der
+  // beiden Faelle gerade gilt; die Delegate-Einrueckung und der
+  // Kopfzeilen-Klick fragen beide danach statt "filter" doppelt zu pruefen.
+  readonly property bool grouped: sheet.filter === ""
+
+  // Die Zeilen, die die Liste tatsaechlich zeichnet: im Suchmodus die
+  // gefilterten Modelle ohne Kopfzeilen, sonst die gruppierten Zeilen aus
+  // buildGroupedRows(). Der Tastatur-Cursor zeigt in DIESE Liste (nicht
+  // mehr direkt in "shown"), weil er jetzt auch auf Kopfzeilen stehen kann.
+  readonly property var visibleRows: sheet.grouped
+    ? sheet.buildGroupedRows(sheet.models, sheet.expandedProviders)
+    : sheet.shown.map(function (m) { return { kind: "model", model: m } })
+
+  // Die Cursor-Position darf nie ausserhalb der aktuell sichtbaren Zeilen
+  // stehen. Bleibt bewusst ein reines Kuerzen auf die neue Laenge (kein
+  // Repositionieren): eine Kopfzeile, die gerade zuklappt, veraendert nie
+  // ihren eigenen Index (nur was DANACH stand, verschwindet) -- Enter auf
+  // einer Kopfzeile trifft also nach dem Zuklappen wieder dieselbe
+  // Kopfzeile. Nur ein Wechsel des Suchtextes (springt zwischen flacher und
+  // gruppierter Ansicht) kann den Cursor auf eine voellig andere Zeile
+  // legen -- genau das galt schon vor der Gruppierung fuer "shown".
+  onVisibleRowsChanged: sheet.cursor = Math.max(0, Math.min(sheet.cursor, sheet.visibleRows.length - 1))
 
   // W1: eine Meldung, die den tatsaechlichen Grund nennt, statt "Liste aus
   // dem Zwischenspeicher" zu behaupten, wo gar kein Zwischenspeicher
@@ -88,7 +174,32 @@ Item {
     if (sheet.visible) {
       sheet.filter = ""
       search.text = ""
-      sheet.cursor = 0
+      // G7: genau die Gruppe mit dem gemerkten Modell klappt auf, alle
+      // anderen bleiben zu -- ohne gemerktes Modell bleibt ALLES zu (leeres
+      // Objekt). Das Modell selbst wird ueber die ID in "models" gesucht,
+      // nicht blind uebernommen: ein "currentModel", das gar nicht (mehr)
+      // in der Liste steht (z.B. ein per Freitext gesetztes, dem Katalog
+      // unbekanntes), darf keine Gruppe aufklappen, die es gar nicht gibt.
+      var expanded = {}
+      var found = null
+      if (sheet.currentModel !== "") {
+        for (var i = 0; i < sheet.models.length; i++) {
+          if (sheet.models[i].id === sheet.currentModel) { found = sheet.models[i]; break }
+        }
+        if (found) expanded[found.provider] = true
+      }
+      sheet.expandedProviders = expanded
+      // Cursor auf die Zeile des gemerkten Modells in der jetzt (durch die
+      // Zeile darueber) neu berechneten "visibleRows" -- oder auf die erste
+      // Zeile (Kopfzeile), wenn nichts gemerkt oder nichts gefunden wurde.
+      var rows = sheet.visibleRows
+      var pos = 0
+      if (found) {
+        for (var j = 0; j < rows.length; j++) {
+          if (rows[j].kind === "model" && rows[j].model.id === sheet.currentModel) { pos = j; break }
+        }
+      }
+      sheet.cursor = pos
       // Qt.callLater: der Fokus darf erst NACH dem aktuellen Tastendruck
       // (der den Picker ueberhaupt erst geoeffnet hat) wechseln.
       Qt.callLater(function () { if (sheet.visible) search.forceActiveFocus() })
@@ -135,31 +246,42 @@ Item {
         // und genau diese Meldung erscheint dann im Panel. Keine
         // Vorab-Pruefung hier: das waere eine zweite Stelle mit eigenen
         // Regeln fuer dieselbe Frage.
+        // G7: Enter wirkt jetzt auf die sichtbare Zeile ("visibleRows"),
+        // nicht mehr direkt auf "shown" -- eine Zeile kann jetzt auch eine
+        // Kopfzeile sein. Im Suchmodus (grouped === false) enthaelt
+        // "visibleRows" nie Kopfzeilen, das Verhalten bleibt dort also
+        // BYTEGLEICH zu vorher: Enter waehlt die markierte Zeile, oder,
+        // ohne Treffer, geht der getippte Text roh an den Store (siehe G1
+        // weiter unten).
         Keys.onReturnPressed: {
-          if (sheet.shown.length > 0) {
-            var i = Math.max(0, Math.min(sheet.cursor, sheet.shown.length - 1))
-            sheet.picked(sheet.shown[i].id)
+          if (sheet.visibleRows.length > 0) {
+            var i = Math.max(0, Math.min(sheet.cursor, sheet.visibleRows.length - 1))
+            var row = sheet.visibleRows[i]
+            if (row.kind === "header") sheet.toggleHeader(row.provider)
+            else sheet.picked(row.model.id)
           } else if (search.text.trim() !== "") {
             sheet.picked(search.text.trim())
           }
         }
-        // G2: Pfeiltasten verschieben die Auswahl in der (evtl. gefilterten)
-        // Liste; "*" schaltet den Stern der markierten Zeile um. Der Fokus
-        // bleibt dabei die ganze Zeit im Suchfeld -- kein zweiter Fokus-Ort,
-        // um den man sich kuemmern muesste (siehe C2 oben). "*" kommt in
-        // keiner gueltigen Modell-ID vor (siehe valid_model_id in
-        // bin/_common.sh), geht also nie als Zeichen fuer den Filter
-        // verloren.
+        // G2/G7: Pfeiltasten verschieben die Auswahl ueber die sichtbaren
+        // Zeilen (Kopfzeilen plus die Modelle aufgeklappter Gruppen, oder
+        // im Suchmodus die flache Trefferliste); "*" schaltet den Stern der
+        // markierten Zeile um, wenn sie ein Modell ist -- auf einer
+        // Kopfzeile tut "*" nichts. Der Fokus bleibt dabei die ganze Zeit
+        // im Suchfeld -- kein zweiter Fokus-Ort, um den man sich kuemmern
+        // muesste (siehe C2 oben). "*" kommt in keiner gueltigen Modell-ID
+        // vor (siehe valid_model_id in bin/_common.sh), geht also nie als
+        // Zeichen fuer den Filter verloren.
         Keys.onPressed: function (e) {
           if (e.key === Qt.Key_Down) {
-            sheet.cursor = Math.min(sheet.cursor + 1, sheet.shown.length - 1)
+            sheet.cursor = Math.min(sheet.cursor + 1, sheet.visibleRows.length - 1)
             e.accepted = true
           } else if (e.key === Qt.Key_Up) {
             sheet.cursor = Math.max(sheet.cursor - 1, 0)
             e.accepted = true
-          } else if (e.text === "*" && sheet.shown.length > 0) {
-            var m = sheet.shown[Math.max(0, Math.min(sheet.cursor, sheet.shown.length - 1))]
-            if (m) sheet.starToggled(m.id)
+          } else if (e.text === "*" && sheet.visibleRows.length > 0) {
+            var row = sheet.visibleRows[Math.max(0, Math.min(sheet.cursor, sheet.visibleRows.length - 1))]
+            if (row && row.kind === "model") sheet.starToggled(row.model.id)
             e.accepted = true
           }
         }
@@ -208,12 +330,22 @@ Item {
       anchors.bottom: defaultRow.top
       anchors.bottomMargin: Style.space(4)
       clip: true
-      model: sheet.shown
+      model: sheet.visibleRows
       currentIndex: sheet.cursor
 
+      // G7: eine Zeile ist jetzt entweder eine Kopfzeile (kind === "header")
+      // oder eine Modellzeile (kind === "model", das eigentliche Modell
+      // steht in modelData.model). Beide teilen sich Rahmen, Markierung und
+      // Klickflaeche; die beiden Text-/Knopf-Elemente darunter blenden sich
+      // je nach Zeilenart gegenseitig aus. Jede Stelle, die auf ein Modell
+      // zugreift, fragt zuerst "row.isHeader" ab (Kurzschlussauswertung) --
+      // eine Kopfzeile hat kein ".model", ein ungeschuetzter Zugriff wuerde
+      // dort einen TypeError werfen.
       delegate: Rectangle {
+        id: row
         required property var modelData
         required property int index
+        readonly property bool isHeader: modelData.kind === "header"
         width: ListView.view.width
         height: Style.spacing.popupRowHeight
         radius: Style.cornerRadius
@@ -222,13 +354,37 @@ Item {
           : (rowMouse.containsMouse && !sheet.busy ? Style.hoverFill : "transparent")
         opacity: sheet.busy ? 0.6 : 1.0
 
+        // Kopfzeile: Chevron (auf-/zugeklappt) + Anbietername + Anzahl,
+        // z.B. "opencode 64". Chevron als \u-Escape, wie jede Glyphe in
+        // diesem Projekt (keine Nicht-ASCII-Bytes in QML).
         Text {
+          visible: row.isHeader
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          anchors.leftMargin: Style.spacing.sm
+          anchors.rightMargin: Style.spacing.sm
+          text: row.isHeader
+            ? (modelData.expanded ? "\u25be " : "\u25b8 ") + modelData.provider + " " + modelData.count
+            : ""
+          color: sheet.fg
+          font.family: sheet.fontFam
+          font.pixelSize: Style.font.body
+          elide: Text.ElideRight
+        }
+
+        // Modellzeile: wie vor der Gruppierung, zusaetzlich eingerueckt,
+        // solange ueberhaupt gruppiert angezeigt wird ("sheet.grouped") --
+        // im Suchmodus gibt es keine Kopfzeilen, also auch keine Einrueckung
+        // (Spezifikation: Suche zeigt die flache Liste exakt wie vorher).
+        Text {
+          visible: !row.isHeader
           anchors.left: parent.left
           anchors.right: starButton.left
           anchors.verticalCenter: parent.verticalCenter
-          anchors.leftMargin: Style.spacing.sm
+          anchors.leftMargin: Style.spacing.sm + (sheet.grouped ? Style.space(12) : 0)
           anchors.rightMargin: Style.spacing.xs
-          text: modelData.id
+          text: row.isHeader ? "" : modelData.model.id
           color: sheet.fg
           font.family: sheet.fontFam
           font.pixelSize: Style.font.body
@@ -239,20 +395,23 @@ Item {
         // (\u2605), ohne dass irgendeine Stelle "store star|unstar"
         // ueberhaupt aufgerufen haette. z:1 haelt den Knopf ueber der
         // Zeilen-MouseArea, damit ein Klick auf den Stern nicht stattdessen
-        // die Zeile auswaehlt.
+        // die Zeile auswaehlt. G7: auf einer Kopfzeile gibt es keinen
+        // Stern-Knopf -- "*" auf einer Kopfzeile tut laut Spezifikation
+        // nichts.
         PanelActionButton {
           id: starButton
+          visible: !row.isHeader
           z: 1
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
           anchors.rightMargin: Style.spacing.xs
           size: Style.space(22)
-          iconText: modelData.starred ? "\u2605" : "\u2606"
-          tooltipText: modelData.starred ? "Remove star" : "Add star"
+          iconText: !row.isHeader && modelData.model.starred ? "\u2605" : "\u2606"
+          tooltipText: !row.isHeader && modelData.model.starred ? "Remove star" : "Add star"
           foreground: sheet.fg
           fontFamily: sheet.fontFam
-          enabled: !sheet.busy
-          onClicked: sheet.starToggled(modelData.id)
+          enabled: !sheet.busy && !row.isHeader
+          onClicked: { if (!row.isHeader) sheet.starToggled(modelData.model.id) }
         }
 
         MouseArea {
@@ -262,7 +421,11 @@ Item {
           hoverEnabled: !sheet.busy
           enabled: !sheet.busy
           cursorShape: Qt.PointingHandCursor
-          onClicked: { sheet.cursor = index; sheet.picked(modelData.id) }
+          onClicked: {
+            sheet.cursor = index
+            if (row.isHeader) sheet.toggleHeader(modelData.provider)
+            else sheet.picked(modelData.model.id)
+          }
         }
       }
     }
