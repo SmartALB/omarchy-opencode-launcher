@@ -73,6 +73,24 @@ Item {
     sheet.expandedProviders = next
   }
 
+  // G8 (Untergruppen): welche Untergruppen gerade aufgeklappt sind. Der
+  // Schluessel ist "anbieter/untergruppe" -- ein einzelnes flaches Objekt
+  // statt eines verschachtelten (anbieter -> untergruppe -> bool), aus
+  // demselben Grund wie oben bei expandedProviders: ein Nachschlagen bleibt
+  // ein einzelner Property-Zugriff. Anbieternamen und Untergruppennamen
+  // enthalten selbst nie "/" (beide sind bereits abgetrennte ID-Segmente
+  // bzw. ein Namensteil vor dem ersten Bindestrich), der Schluessel ist
+  // also nie mehrdeutig.
+  property var expandedSubgroups: ({})
+
+  function toggleSubgroup(provider, subgroup) {
+    var key = provider + "/" + subgroup
+    var next = {}
+    for (var k in sheet.expandedSubgroups) next[k] = sheet.expandedSubgroups[k]
+    next[key] = !next[key]
+    sheet.expandedSubgroups = next
+  }
+
   // G7: die Gruppierung als benannte Funktion (wie shortPath() in
   // Panel.qml), damit eine Textregel in test/qml.test.sh sich daran
   // festhalten kann. Reine Arithmetik ohne Datei-IO, wie shortPath():
@@ -95,6 +113,44 @@ Item {
   // - Eine Kopfzeile je Gruppe ({kind:"header", provider, count,
   //   expanded}), gefolgt von den Modellzeilen ({kind:"model", model:m})
   //   NUR wenn die Gruppe aufgeklappt ist.
+  //
+  // G8 (dritte Ebene, Untergruppen je Anbieter): Signatur bleibt
+  // "buildGroupedRows(models, expanded)" -- wie von der bestehenden
+  // Textregel test_gruppierungsfunktion_definiert_und_von_liste_aufgerufen
+  // verlangt --, "expanded" traegt jetzt zwei Zustaende statt einem:
+  // { providers: {...}, subgroups: {...} }. Jede Zeile bekommt zusaetzlich
+  // "indent" (0 = Anbieter-Kopfzeile, 1 = Untergruppen-Kopfzeile, ein
+  // Einzelgaenger-Modell oder -- falls der Anbieter gar nicht unterteilt
+  // wird -- jedes seiner Modelle, 2 = ein Modell INNERHALB einer echten
+  // Untergruppe). Genau drei Ebenen, nie vier: eine Untergruppe bekommt
+  // hier keine eigene Unter-Unterteilung.
+  //
+  // Name der Untergruppe je Modell:
+  // - ID mit drei Segmenten ("anbieter/hersteller/modell", real z.B.
+  //   "lmstudio/google/gemma-4-12b") -> das MITTLERE Segment (Hersteller).
+  // - ID mit zwei Segmenten ("anbieter/modell", real z.B.
+  //   "opencode/claude-opus-4-5") -> der Modellname bis zum ERSTEN
+  //   Bindestrich ("claude"). Eine Heuristik, bewusst als solche in Kauf
+  //   genommen (siehe Auftrag) -- kein Anspruch, jeden Herstellernamen
+  //   exakt zu treffen.
+  //
+  // Die Schwelle (der eigentlich risikoreiche Teil dieser Aenderung): ein
+  // Anbieter wird NUR unterteilt, wenn dabei MINDESTENS ZWEI Untergruppen
+  // mit je MINDESTENS ZWEI Mitgliedern entstehen. "openai" liefert bei
+  // dieser Maschine fuer jede seiner 13 IDs dieselbe Untergruppe ("gpt") --
+  // eine einzige Gruppe trennt nichts, "openai" bleibt flach, exakt wie vor
+  // dieser Aenderung. Untergruppen mit nur einem Mitglied ("Einzelgaenger")
+  // werden nie zu eigenen Kopfzeilen -- sie erscheinen flach NACH allen
+  // echten Untergruppen desselben Anbieters, auf der Einrueckung der
+  // Untergruppen-Kopfzeilen (indent: 1), ohne eigene Kopfzeile. Das gilt
+  // auch dann, wenn der Anbieter unterteilt wird: nur Gruppen mit >=2
+  // Mitgliedern bekommen eine Kopfzeile, alles andere faellt in die
+  // Einzelgaenger-Liste.
+  //
+  // Die Schwellen-Entscheidung lebt AUSSCHLIESSLICH hier (nicht als
+  // Kopie irgendwo in einem Binding) -- jede andere Stelle, die wissen
+  // muss, ob ein Anbieter unterteilt ist (siehe onVisibleChanged unten),
+  // fragt buildGroupedRows() selbst statt die Arithmetik nachzubauen.
   function buildGroupedRows(models, expanded) {
     var order = []
     var buckets = {}
@@ -107,12 +163,71 @@ Item {
     for (var g = 0; g < order.length; g++) {
       var provider = order[g]
       var bucket = buckets[provider]
-      var starredFirst = bucket.filter(function (x) { return x.starred })
-        .concat(bucket.filter(function (x) { return !x.starred }))
-      var isOpen = !!(expanded && expanded[provider])
-      rows.push({ kind: "header", provider: provider, count: bucket.length, expanded: isOpen })
-      if (isOpen) {
-        for (var j = 0; j < starredFirst.length; j++) rows.push({ kind: "model", model: starredFirst[j] })
+      var isOpen = !!(expanded && expanded.providers && expanded.providers[provider])
+      rows.push({ kind: "header", provider: provider, count: bucket.length, expanded: isOpen, indent: 0 })
+      if (!isOpen) continue
+
+      // Untergruppen-Namen je Modell bestimmen, in Reihenfolge des ersten
+      // Auftretens innerhalb DIESES Anbieters -- dieselbe Erstauftreten-
+      // Regel wie fuer die Anbieter-Reihenfolge oben, nur eine Ebene
+      // tiefer.
+      var subOrder = []
+      var subBuckets = {}
+      for (var si = 0; si < bucket.length; si++) {
+        var mm = bucket[si]
+        var segs = String(mm.id).split("/")
+        var subname
+        if (segs.length >= 3) {
+          subname = segs[1]
+        } else {
+          var last = segs[segs.length - 1]
+          var dash = last.indexOf("-")
+          subname = dash === -1 ? last : last.substring(0, dash)
+        }
+        if (!subBuckets[subname]) { subBuckets[subname] = []; subOrder.push(subname) }
+        subBuckets[subname].push(mm)
+      }
+
+      // Die Schwelle selbst: zaehlen, wie viele Untergruppen ueberhaupt
+      // mindestens zwei Mitglieder haben -- erst ab zwei solchen Gruppen
+      // lohnt sich eine Unterteilung.
+      var qualifying = 0
+      for (var qi = 0; qi < subOrder.length; qi++) {
+        if (subBuckets[subOrder[qi]].length >= 2) qualifying++
+      }
+      var subdivided = qualifying >= 2
+
+      if (!subdivided) {
+        var starredFirst = bucket.filter(function (x) { return x.starred })
+          .concat(bucket.filter(function (x) { return !x.starred }))
+        for (var j = 0; j < starredFirst.length; j++) {
+          rows.push({ kind: "model", model: starredFirst[j], indent: 1 })
+        }
+        continue
+      }
+
+      var singletons = []
+      for (var sg = 0; sg < subOrder.length; sg++) {
+        var subname2 = subOrder[sg]
+        var subBucket = subBuckets[subname2]
+        if (subBucket.length < 2) { singletons.push(subBucket[0]); continue }
+        var subKey = provider + "/" + subname2
+        var isSubOpen = !!(expanded && expanded.subgroups && expanded.subgroups[subKey])
+        rows.push({ kind: "header", provider: provider, subgroup: subname2, count: subBucket.length, expanded: isSubOpen, indent: 1 })
+        if (isSubOpen) {
+          var subStarredFirst = subBucket.filter(function (x) { return x.starred })
+            .concat(subBucket.filter(function (x) { return !x.starred }))
+          for (var k = 0; k < subStarredFirst.length; k++) {
+            rows.push({ kind: "model", model: subStarredFirst[k], indent: 2 })
+          }
+        }
+      }
+      // Einzelgaenger: NACH allen Untergruppen-Kopfzeilen (und ihren evtl.
+      // aufgeklappten Modellen) dieses Anbieters, flach, ohne eigene
+      // Kopfzeile, auf derselben Einrueckung wie eine Untergruppen-
+      // Kopfzeile (indent: 1).
+      for (var t = 0; t < singletons.length; t++) {
+        rows.push({ kind: "model", model: singletons[t], indent: 1 })
       }
     }
     return rows
@@ -130,7 +245,7 @@ Item {
   // buildGroupedRows(). Der Tastatur-Cursor zeigt in DIESE Liste (nicht
   // mehr direkt in "shown"), weil er jetzt auch auf Kopfzeilen stehen kann.
   readonly property var visibleRows: sheet.grouped
-    ? sheet.buildGroupedRows(sheet.models, sheet.expandedProviders)
+    ? sheet.buildGroupedRows(sheet.models, { providers: sheet.expandedProviders, subgroups: sheet.expandedSubgroups })
     : sheet.shown.map(function (m) { return { kind: "model", model: m } })
 
   // Die Cursor-Position darf nie ausserhalb der aktuell sichtbaren Zeilen
@@ -181,14 +296,49 @@ Item {
       // in der Liste steht (z.B. ein per Freitext gesetztes, dem Katalog
       // unbekanntes), darf keine Gruppe aufklappen, die es gar nicht gibt.
       var expanded = {}
+      var expandedSub = {}
       var found = null
       if (sheet.currentModel !== "") {
         for (var i = 0; i < sheet.models.length; i++) {
           if (sheet.models[i].id === sheet.currentModel) { found = sheet.models[i]; break }
         }
-        if (found) expanded[found.provider] = true
+        if (found) {
+          expanded[found.provider] = true
+          // G8: welche Untergruppe (falls ueberhaupt eine) zusaetzlich
+          // aufklappen muss, wird NICHT hier nachgerechnet -- das waere
+          // eine zweite Kopie der Schwellen-/Namens-Arithmetik aus
+          // buildGroupedRows(). Stattdessen fragen wir die Funktion
+          // selbst: erst mit nur dem Anbieter aufgeklappt (probe) -- ist
+          // das gemerkte Modell darin schon als "model"-Zeile sichtbar,
+          // ist es entweder ein Einzelgaenger oder der Anbieter bleibt
+          // ohnehin flach, keine Untergruppe noetig. Ist es NICHT
+          // sichtbar, steht es hinter einer zugeklappten Untergruppen-
+          // Kopfzeile -- wir probieren jede Kopfzeile einzeln durch, bis
+          // das Modell auftaucht.
+          var probe = sheet.buildGroupedRows(sheet.models, { providers: expanded, subgroups: {} })
+          var visible = false
+          for (var p = 0; p < probe.length; p++) {
+            if (probe[p].kind === "model" && probe[p].model.id === sheet.currentModel) { visible = true; break }
+          }
+          if (!visible) {
+            for (var h = 0; h < probe.length; h++) {
+              var hdr = probe[h]
+              if (hdr.kind !== "header" || hdr.subgroup === undefined) continue
+              var tryKey = found.provider + "/" + hdr.subgroup
+              var trySub = {}
+              trySub[tryKey] = true
+              var probe2 = sheet.buildGroupedRows(sheet.models, { providers: expanded, subgroups: trySub })
+              var hit = false
+              for (var p2 = 0; p2 < probe2.length; p2++) {
+                if (probe2[p2].kind === "model" && probe2[p2].model.id === sheet.currentModel) { hit = true; break }
+              }
+              if (hit) { expandedSub[tryKey] = true; break }
+            }
+          }
+        }
       }
       sheet.expandedProviders = expanded
+      sheet.expandedSubgroups = expandedSub
       // Cursor auf die Zeile des gemerkten Modells in der jetzt (durch die
       // Zeile darueber) neu berechneten "visibleRows" -- oder auf die erste
       // Zeile (Kopfzeile), wenn nichts gemerkt oder nichts gefunden wurde.
@@ -253,12 +403,17 @@ Item {
         // BYTEGLEICH zu vorher: Enter waehlt die markierte Zeile, oder,
         // ohne Treffer, geht der getippte Text roh an den Store (siehe G1
         // weiter unten).
+        // G8: eine Kopfzeile ist jetzt entweder eine Anbieter-Kopfzeile
+        // (row.subgroup ist undefined -> toggleHeader) oder eine
+        // Untergruppen-Kopfzeile (row.subgroup gesetzt -> toggleSubgroup).
         Keys.onReturnPressed: {
           if (sheet.visibleRows.length > 0) {
             var i = Math.max(0, Math.min(sheet.cursor, sheet.visibleRows.length - 1))
             var row = sheet.visibleRows[i]
-            if (row.kind === "header") sheet.toggleHeader(row.provider)
-            else sheet.picked(row.model.id)
+            if (row.kind === "header") {
+              if (row.subgroup !== undefined) sheet.toggleSubgroup(row.provider, row.subgroup)
+              else sheet.toggleHeader(row.provider)
+            } else sheet.picked(row.model.id)
           } else if (search.text.trim() !== "") {
             sheet.picked(search.text.trim())
           }
@@ -354,18 +509,21 @@ Item {
           : (rowMouse.containsMouse && !sheet.busy ? Style.hoverFill : "transparent")
         opacity: sheet.busy ? 0.6 : 1.0
 
-        // Kopfzeile: Chevron (auf-/zugeklappt) + Anbietername + Anzahl,
-        // z.B. "opencode 64". Chevron als \u-Escape, wie jede Glyphe in
-        // diesem Projekt (keine Nicht-ASCII-Bytes in QML).
+        // Kopfzeile: Chevron (auf-/zugeklappt) + Name + Anzahl, z.B.
+        // "opencode 64" (Anbieter, indent 0) oder "google 10" (Untergruppe,
+        // indent 1, um eine Ebene eingerueckt). Chevron als \u-Escape, wie
+        // jede Glyphe in diesem Projekt (keine Nicht-ASCII-Bytes in QML).
         Text {
           visible: row.isHeader
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
-          anchors.leftMargin: Style.spacing.sm
+          anchors.leftMargin: Style.spacing.sm + Style.space(12) * modelData.indent
           anchors.rightMargin: Style.spacing.sm
           text: row.isHeader
-            ? (modelData.expanded ? "\u25be " : "\u25b8 ") + modelData.provider + " " + modelData.count
+            ? (modelData.expanded ? "\u25be " : "\u25b8 ")
+              + (modelData.subgroup !== undefined ? modelData.subgroup : modelData.provider)
+              + " " + modelData.count
             : ""
           color: sheet.fg
           font.family: sheet.fontFam
@@ -377,12 +535,16 @@ Item {
         // solange ueberhaupt gruppiert angezeigt wird ("sheet.grouped") --
         // im Suchmodus gibt es keine Kopfzeilen, also auch keine Einrueckung
         // (Spezifikation: Suche zeigt die flache Liste exakt wie vorher).
+        // G8: "modelData.indent" traegt jetzt 1 (direkt unter dem Anbieter,
+        // ein Einzelgaenger, oder der Anbieter bleibt unterteilungsfrei)
+        // oder 2 (innerhalb einer echten Untergruppe) -- die Einrueckung
+        // waechst mit der tatsaechlichen Tiefe statt einer festen Stufe.
         Text {
           visible: !row.isHeader
           anchors.left: parent.left
           anchors.right: starButton.left
           anchors.verticalCenter: parent.verticalCenter
-          anchors.leftMargin: Style.spacing.sm + (sheet.grouped ? Style.space(12) : 0)
+          anchors.leftMargin: Style.spacing.sm + (sheet.grouped ? Style.space(12) * modelData.indent : 0)
           anchors.rightMargin: Style.spacing.xs
           text: row.isHeader ? "" : modelData.model.id
           color: sheet.fg
@@ -423,8 +585,10 @@ Item {
           cursorShape: Qt.PointingHandCursor
           onClicked: {
             sheet.cursor = index
-            if (row.isHeader) sheet.toggleHeader(modelData.provider)
-            else sheet.picked(modelData.model.id)
+            if (row.isHeader) {
+              if (modelData.subgroup !== undefined) sheet.toggleSubgroup(modelData.provider, modelData.subgroup)
+              else sheet.toggleHeader(modelData.provider)
+            } else sheet.picked(modelData.model.id)
           }
         }
       }

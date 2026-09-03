@@ -394,4 +394,206 @@ test_gruppierung_arithmetik_erstauftreten_und_sterne() {
   assert_eq "${starred_ids[openai]:-}" ""
 }
 
+test_untergruppen_schwelle_lebt_in_gruppierungsfunktion() {
+  # G8 (dritte Ebene): die Schwellen-Entscheidung ("mindestens zwei
+  # Untergruppen mit je mindestens zwei Mitgliedern") muss INNERHALB von
+  # buildGroupedRows() stehen -- nicht als eigene Kopie in einem Binding
+  # (z.B. "visibleRows") daneben. Zwei Pruefungen:
+  #   1) die Woerter "qualifying" und "subdivided" (die Namen der
+  #      Schwellen-Variablen) muessen im FUNKTIONSKOERPER vorkommen --
+  #      extrahiert per sed-Bereich von der Funktionssignatur bis zur
+  #      naechsten schliessenden Klammer auf Funktionsebene, dieselbe
+  #      Methode wie test_abbau_deckt_jeden_erklaerten_prozess oben.
+  #   2) dieselben Woerter duerfen NICHT im "visibleRows"-Binding
+  #      auftauchen -- ein Umbau, der die Schwelle zusaetzlich (oder
+  #      stattdessen) dort nachbaut, faellt hier durch.
+  body="$(sed -n '/^  function buildGroupedRows(models, expanded) {/,/^  }/p' "$ROOT/ModelSheet.qml")"
+  assert_contains "$body" "qualifying"
+  assert_contains "$body" "subdivided"
+
+  vr="$(grep -A4 'readonly property var visibleRows:' "$ROOT/ModelSheet.qml")"
+  assert_not_contains "$vr" "qualifying"
+  assert_not_contains "$vr" "subdivided"
+}
+
+test_untergruppen_kopfzeile_aus_funktionsausgabe_gerendert() {
+  # G8: die Untergruppen-Kopfzeile im Delegate muss aus dem, was
+  # buildGroupedRows() liefert, gerendert werden ("modelData.subgroup",
+  # "modelData.indent") -- nicht aus einer eigenen, im Delegate
+  # nachgerechneten Groesse. Die Kopfzeile unterscheidet Anbieter- von
+  # Untergruppen-Kopfzeile ueber "modelData.subgroup !== undefined", und
+  # die Einrueckung (auch der Modellzeile) haengt an "modelData.indent".
+  hdr="$(grep -A10 'visible: row.isHeader' "$ROOT/ModelSheet.qml")"
+  assert_contains "$hdr" "modelData.subgroup"
+  assert_contains "$hdr" "modelData.indent"
+
+  mdl="$(grep -A10 'visible: !row.isHeader' "$ROOT/ModelSheet.qml")"
+  assert_contains "$mdl" "modelData.indent"
+}
+
+test_genau_drei_ebenen_keine_vierte() {
+  # G8: hoechstens indent 0/1/2 duerfen je vorkommen -- ein "indent: 3"
+  # (eine Unter-Unterteilung EINER Untergruppe) waere die im Auftrag
+  # ausdruecklich ausgeschlossene vierte Ebene.
+  bad="$(grep -n 'indent: 3' "$ROOT/ModelSheet.qml" || true)"
+  assert_eq "$bad" ""
+}
+
+test_untergruppen_schwelle_arithmetik() {
+  # ACHTUNG (ehrlich, nicht schoengeredet): dies ist KEIN Aufruf der echten
+  # QML-Funktion buildGroupedRows() -- dieselbe Einschraenkung wie bei
+  # test_gruppierung_arithmetik_erstauftreten_und_sterne oben (ModelSheet.qml
+  # importiert qs.Commons/qs.Ui, ausserhalb der laufenden Omarchy-Shell
+  # nicht aufloesbar). Was hier steht, ist eine PARALLELE Nachrechnung
+  # derselben Schwellen- und Namens-Arithmetik in Bash -- konstruiert, um
+  # GENAU die auf dieser Maschine gemessene reale Verteilung nachzubilden
+  # (siehe Auftrag): opencode 64 Modelle (gpt 20, claude 12, gemini 7,
+  # kimi 4, muse 3, minimax 3, zwei weitere qualifizierende Gruppen zu je 5
+  # macht 10, plus 5 Einzelgaenger -- 20+12+7+4+3+3+10+5 = 64), lmstudio 46
+  # (qwen 11, google 10, mistralai 6, nvidia 4, zai-org 2, openai 2, eine
+  # weitere qualifizierende Gruppe zu 4, plus 7 Einzelgaenger --
+  # 11+10+6+4+2+2+4+7 = 46), openai 13 (alle 13 IDs ergeben dieselbe
+  # Untergruppe "gpt" -- eine einzige Gruppe, keine Trennung). Deckt die
+  # RECHENREGEL ab (Namensquelle je ID-Form, die Zwei-mal-zwei-Schwelle,
+  # Einzelgaenger-Reihenfolge NACH allen Untergruppen) -- nicht den
+  # tatsaechlich in ModelSheet.qml ausgefuehrten Bytecode; die beiden
+  # Textregeln oben plus qmllint plus die visuelle Kontrolle im Panel
+  # schliessen diese Luecke.
+  subgroup_bash() {  # subgroup_bash <id>
+    local id="$1"
+    IFS='/' read -ra segs <<< "$id"
+    local n="${#segs[@]}"
+    if [ "$n" -ge 3 ]; then printf '%s' "${segs[1]}"; return 0; fi
+    local last="${segs[$((n - 1))]}"
+    printf '%s' "${last%%-*}"
+  }
+
+  # Namensquelle je ID-Form pruefen, unabhaengig vom Schwellenlauf unten.
+  assert_eq "$(subgroup_bash 'lmstudio/google/gemma-4-12b')" "google"
+  assert_eq "$(subgroup_bash 'opencode/claude-opus-4-5')" "claude"
+
+  # gen_ids <provider> <subgroup-praefix> <anzahl> <dreisegmentig:0|1>
+  # gibt eine ID je Zeile auf stdout aus -- erzeugt IDs beider im Auftrag
+  # genannten Formen: "provider/vendor/model" (dreisegmentig) oder
+  # "provider/name-N" (zweisegmentig, Name vor Bindestrich = Praefix).
+  gen_ids() {
+    local provider="$1" prefix="$2" count="$3" threeseg="$4" k
+    for ((k = 1; k <= count; k++)); do
+      if [ "$threeseg" = "1" ]; then
+        printf '%s/%s/model-%d\n' "$provider" "$prefix" "$k"
+      else
+        printf '%s/%s-%d\n' "$provider" "$prefix" "$k"
+      fi
+    done
+  }
+
+  # order/sizes/qualifying/subdivided sind absichtlich GLOBAL innerhalb
+  # dieser Testfunktion (kein "local"/eigenes "declare" in
+  # provider_grouping_bash) -- bash reicht sie ueber dynamischen Scope an
+  # die aufgerufene Funktion durch, und der Aufrufer liest sie danach
+  # weiter aus (die Reihenfolge-Pruefung fuer lmstudio unten braucht genau
+  # das). Direkte Argumente statt einer Pipe/stdin: eine Pipe wuerde
+  # provider_grouping_bash in eine eigene Subshell stellen, in der jede
+  # Zuweisung an diese Variablen verlorenginge, sobald die Pipe endet.
+  declare -A sizes=()
+  order=()
+  qualifying=0
+  subdivided=0
+
+  provider_grouping_bash() {  # provider_grouping_bash <id...>
+    sizes=()
+    order=()
+    local id sub
+    for id in "$@"; do
+      sub="$(subgroup_bash "$id")"
+      if [ -z "${sizes[$sub]:-}" ]; then order+=("$sub"); fi
+      sizes[$sub]=$(( ${sizes[$sub]:-0} + 1 ))
+    done
+    qualifying=0
+    local s
+    for s in "${order[@]}"; do
+      [ "${sizes[$s]}" -ge 2 ] && qualifying=$((qualifying + 1))
+    done
+    subdivided=0
+    # ACHTUNG (set -e-Falle): "[ ... ] && subdivided=1" als LETZTE Anweisung
+    # dieser Funktion wuerde deren eigenen Exit-Status auf den der
+    # gescheiterten Bedingung setzen, sobald qualifying < 2 -- ein bare
+    # Funktionsaufruf (nicht in einer if/while-Bedingung) mit diesem Status
+    # reisst unter "set -e" den ganzen Test ab, OHNE je einen assert_*
+    # auszuloesen (leerer Fehlschlag, schwer zu diagnostizieren -- genau so
+    # ist die erste Fassung dieses Tests tatsaechlich gescheitert). Ein
+    # richtiges if/then/fi ist dagegen unter "set -e" ausdruecklich
+    # ausgenommen, auch ohne "else".
+    if [ "$qualifying" -ge 2 ]; then subdivided=1; fi
+  }
+
+  # -- openai: 13 IDs, alle "gpt" -- eine einzige Gruppe trennt nichts,
+  #    bleibt flach. --------------------------------------------------
+  mapfile -t openai_ids < <(gen_ids openai gpt 13 0)
+  assert_eq "${#openai_ids[@]}" "13"
+  provider_grouping_bash "${openai_ids[@]}"
+  assert_eq "$subdivided" "0"
+
+  # -- opencode: reale Verteilung (zweisegmentige IDs, Name vor
+  #    Bindestrich). gpt/claude/gemini/kimi/muse/minimax je >=2 Mitglieder
+  #    (qualifizierend), otherA/otherB stehen fuer die im Auftrag mit "..."
+  #    angedeuteten weiteren qualifizierenden Gruppen, solo1..5 sind die
+  #    fuenf Einzelgaenger. Summe: 20+12+7+4+3+3+5+5+5*1 = 64. -----------
+  mapfile -t oc_ids < <(
+    gen_ids opencode gpt 20 0
+    gen_ids opencode claude 12 0
+    gen_ids opencode gemini 7 0
+    gen_ids opencode kimi 4 0
+    gen_ids opencode muse 3 0
+    gen_ids opencode minimax 3 0
+    gen_ids opencode otherA 5 0
+    gen_ids opencode otherB 5 0
+    gen_ids opencode solo1 1 0
+    gen_ids opencode solo2 1 0
+    gen_ids opencode solo3 1 0
+    gen_ids opencode solo4 1 0
+    gen_ids opencode solo5 1 0
+  )
+  assert_eq "${#oc_ids[@]}" "64"
+  provider_grouping_bash "${oc_ids[@]}"
+  assert_eq "$subdivided" "1"
+
+  # -- lmstudio: reale Verteilung (dreisegmentige IDs, mittleres Segment).
+  #    qwen/google/mistralai/nvidia/zai-org/openai qualifizierend, otherA
+  #    steht fuer die weitere angedeutete qualifizierende Gruppe, solo1..7
+  #    sind die sieben Einzelgaenger. Summe: 11+10+6+4+2+2+4+7*1 = 46. ---
+  mapfile -t lm_ids < <(
+    gen_ids lmstudio qwen 11 1
+    gen_ids lmstudio google 10 1
+    gen_ids lmstudio mistralai 6 1
+    gen_ids lmstudio nvidia 4 1
+    gen_ids lmstudio zai-org 2 1
+    gen_ids lmstudio openai 2 1
+    gen_ids lmstudio otherA 4 1
+    gen_ids lmstudio solo1 1 1
+    gen_ids lmstudio solo2 1 1
+    gen_ids lmstudio solo3 1 1
+    gen_ids lmstudio solo4 1 1
+    gen_ids lmstudio solo5 1 1
+    gen_ids lmstudio solo6 1 1
+    gen_ids lmstudio solo7 1 1
+  )
+  assert_eq "${#lm_ids[@]}" "46"
+  provider_grouping_bash "${lm_ids[@]}"
+  assert_eq "$subdivided" "1"
+
+  # Reihenfolge: alle qualifizierenden Untergruppen (Erstauftreten) muessen
+  # VOR dem ersten Einzelgaenger-Praefix stehen -- exakt die im Auftrag
+  # verlangte Platzierung "Einzelgaenger NACH allen Untergruppen".
+  local last_qualifying_index=-1 first_solo_index=-1 i
+  for i in "${!order[@]}"; do
+    if [ "${sizes[${order[$i]}]}" -ge 2 ]; then
+      last_qualifying_index="$i"
+    elif [ "$first_solo_index" -eq -1 ]; then
+      first_solo_index="$i"
+    fi
+  done
+  assert_eq "$([ "$first_solo_index" -gt "$last_qualifying_index" ] && echo ja || echo nein)" "ja"
+}
+
 run_tests
