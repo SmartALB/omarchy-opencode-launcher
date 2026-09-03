@@ -775,14 +775,31 @@ Panel {
                 // aussagekraeftige Teil) und die Ellipse vorne sitzt; der
                 // volle, absolute Pfad (nicht die Tilde-Form, nicht
                 // gekuerzt) steht im Hover-Tooltip auf rowMouse.
-                Text {
+                // Marker und Beschriftung sind ZWEI Texte, nicht einer:
+                // ElideLeft kuerzt von links, und in einer gemeinsamen
+                // Zeichenkette stand der Kringel genau dort -- bei einer zu
+                // breiten Zeile verschwand also zuerst die Laufanzeige.
+                // Getrennt kann nur noch der Pfad elidiert werden.
+                Row {
+                  id: rowLine
                   width: parent.width
-                  text: (modelData.running ? "\u25CF  " : "\u25CB  ")
-                    + (modelData.name !== modelData.displayPath ? modelData.name : root.shortPath(modelData.displayPath))
-                  color: root.barForeground
-                  font.family: root.fontFam
-                  font.pixelSize: Style.font.body
-                  elide: Text.ElideLeft
+
+                  Text {
+                    id: rowMarker
+                    text: modelData.running ? "\u25CF  " : "\u25CB  "
+                    color: root.barForeground
+                    font.family: root.fontFam
+                    font.pixelSize: Style.font.body
+                  }
+
+                  Text {
+                    width: rowLine.width - rowMarker.width
+                    text: (modelData.name !== modelData.displayPath ? modelData.name : root.shortPath(modelData.displayPath))
+                    color: root.barForeground
+                    font.family: root.fontFam
+                    font.pixelSize: Style.font.body
+                    elide: Text.ElideLeft
+                  }
                 }
               }
 

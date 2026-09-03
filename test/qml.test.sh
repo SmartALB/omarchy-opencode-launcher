@@ -262,4 +262,18 @@ test_shortpath_segmentarithmetik() {
     "${ellipsis}/Sources/Extern/shannon"
 }
 
+test_laufanzeige_steht_nicht_im_elidierten_text() {
+  # Der Marker (voller/leerer Kringel) darf NICHT in demselben Text stehen,
+  # der ElideLeft traegt: ElideLeft kuerzt von links, also verschwaende genau
+  # der Marker als erstes, sobald die Zeile zu breit wird. Genau das ist
+  # passiert und im Screenshot aufgefallen. Der Marker gehoert in ein eigenes,
+  # nicht elidiertes Text-Element.
+  block="$(sed -n '/id: rowLine/,/^                }/p' "$ROOT/Panel.qml")"
+  elided="$(printf '%s' "$block" | grep -B8 'elide: Text.ElideLeft')"
+  assert_not_contains "$elided" '\u25CF'
+  assert_not_contains "$elided" '\u25CB'
+  # ... und der Marker muss trotzdem irgendwo in der Zeile vorkommen.
+  assert_contains "$block" '\u25CF'
+}
+
 run_tests
