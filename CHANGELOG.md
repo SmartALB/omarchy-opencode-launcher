@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1 -- 2026-09-03
+
+The panel footer now carries the plugin's version, bottom right, in
+the same muted styling the sibling `smartalb.vpn` widget uses. The
+key legend to its left is hidden when there are no projects to which
+it could refer; the version is not -- with nothing pinned yet is
+exactly when you want to know which build is running.
+
 ## 1.0.0 -- 2026-09-02
 
 First release. Projects come from a pinned config file and from opencode's

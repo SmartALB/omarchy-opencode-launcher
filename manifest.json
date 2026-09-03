@@ -2,17 +2,25 @@
   "schemaVersion": 1,
   "id": "smartalb.opencode",
   "name": "opencode Launcher",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "SmartALB",
   "license": "MIT",
   "description": "Open opencode in a project directory, with the model chosen before it starts. The model travels as a flag; your opencode.json is never written to.",
-  "kinds": ["bar-widget"],
-  "entryPoints": { "barWidget": "Panel.qml" },
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
   "barWidget": {
     "displayName": "opencode Launcher",
     "description": "Open opencode in a project directory with a chosen model",
     "category": "Developer Tools",
-    "aliases": ["opencode", "launcher", "projects"],
+    "aliases": [
+      "opencode",
+      "launcher",
+      "projects"
+    ],
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
@@ -22,18 +30,38 @@
       "confirmNewWindow": false
     },
     "schema": [
-      { "key": "barLabel", "type": "enum", "label": "Next to the bar icon",
-        "options": ["Icon", "Running count"], "defaultValue": "Icon",
-        "description": "The model belongs to the project row, so a single pill cannot report it truthfully. It shows the icon, optionally with the number of opencode windows currently open." },
-      { "key": "recentCount", "type": "number", "label": "Recent projects",
+      {
+        "key": "barLabel",
+        "type": "enum",
+        "label": "Next to the bar icon",
+        "options": [
+          "Icon",
+          "Running count"
+        ],
+        "defaultValue": "Icon",
+        "description": "The model belongs to the project row, so a single pill cannot report it truthfully. It shows the icon, optionally with the number of opencode windows currently open."
+      },
+      {
+        "key": "recentCount",
+        "type": "number",
+        "label": "Recent projects",
         "defaultValue": 5,
-        "description": "How many directories from past opencode sessions to list below your pinned ones. 0 turns them off." },
-      { "key": "catalogRefreshHours", "type": "number", "label": "Refresh the model list after",
+        "description": "How many directories from past opencode sessions to list below your pinned ones. 0 turns them off."
+      },
+      {
+        "key": "catalogRefreshHours",
+        "type": "number",
+        "label": "Refresh the model list after",
         "defaultValue": 24,
-        "description": "Hours before the cached model list is fetched again. The refresh button in the panel does it on demand." },
-      { "key": "confirmNewWindow", "type": "boolean", "label": "Ask before a second window",
+        "description": "Hours before the cached model list is fetched again. The refresh button in the panel does it on demand."
+      },
+      {
+        "key": "confirmNewWindow",
+        "type": "boolean",
+        "label": "Ask before a second window",
         "defaultValue": false,
-        "description": "Shift+Enter opens a second window for a project that is already running. Off is the fast path the bar is for." }
+        "description": "Shift+Enter opens a second window for a project that is already running. Off is the fast path the bar is for."
+      }
     ]
   }
 }

@@ -15,7 +15,7 @@ Panel {
   // Zweite Kopie dessen, was manifest.json sagt -- QML kann das Manifest
   // nicht lesen (Omarchys PluginRegistry ist eine Instanz, kein Singleton).
   // test_panel_version_entspricht_dem_manifest haelt beide zusammen.
-  readonly property string pluginVersion: "1.0.0"
+  readonly property string pluginVersion: "1.0.1"
 
   // Quality (Fix Runde 1): sechs Stellen lasen bisher "root.bar.fontFamily"
   // direkt -- "bar" wird erst in Loader.onLoaded eingesetzt, der ERSTE
