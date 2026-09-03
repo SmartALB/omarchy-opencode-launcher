@@ -199,19 +199,31 @@ test_projektzeile_elidiert_links() {
 }
 
 test_pfad_fallback_wird_gekuerzt() {
-  # G6: der Pfad-Fallback in der Namenszeile (der Zweig OHNE echten Namen)
-  # muss auf die letzten drei Segmente gekuerzt sein -- nicht der rohe,
-  # ungekuerzte displayPath. Zwei Pruefungen, damit ein Umgehen an beiden
-  # moeglichen Stellen auffliegt:
-  #   1) die Bindung selbst muss root.shortPath(modelData.displayPath)
-  #      aufrufen (ein Bypass, der wieder das nackte modelData.displayPath
-  #      einsetzt, faellt hier durch)
-  #   2) die Funktion shortPath(p) muss ueberhaupt definiert sein (ein
-  #      Loeschen der Funktion, bei dem irgendwo noch "shortPath" als Text
-  #      auftaucht, faellt hier durch, weil hier nach der Funktions-
-  #      SIGNATUR gesucht wird, nicht nur nach dem Namen)
+  # G8 (vorher G6, ueberholt durch den Screenshot-Fund "…nfig/opencode"):
+  # der Pfad-Fallback in der Namenszeile (der Zweig OHNE echten Namen) lief
+  # bis zu diesem Fix durch root.shortPath() direkt und verliess sich fuer
+  # eine zu schmale Zeile allein auf ElideLeft, das mitten in einem Segment
+  # abschneiden konnte. Jetzt laeuft er durch root.fitPath(), das aus
+  # root.pathCandidates() (drei/zwei/ein Segment, siehe
+  # test_pfadleiter_kandidaten unten) die breiteste noch passende
+  # Kandidatin waehlt. shortPath(p) selbst bleibt trotzdem als eigene,
+  # oeffentliche Funktion bestehen -- pathCandidates() ruft fuer die
+  # Rechenregel intern segmentsAtMost(p, n) auf, nicht mehr shortPath()
+  # selbst, aber die Funktionssignatur ist Teil des in G6 dokumentierten
+  # Vertrags und bleibt Pruefgegenstand. Drei Pruefungen, damit ein
+  # Umgehen an keiner der moeglichen Stellen unbemerkt bleibt:
+  #   1) die Bindung selbst muss root.fitPath(modelData.displayPath, ...)
+  #      aufrufen (ein Bypass, der wieder direkt root.shortPath(...) oder
+  #      das nackte modelData.displayPath einsetzt, faellt hier durch)
+  #   2) die Funktion fitPath(p, availableWidth, metrics) muss ueberhaupt
+  #      definiert sein (nach Funktions-SIGNATUR gesucht, nicht nur nach
+  #      dem Namen)
+  #   3) die Funktion shortPath(p) muss weiterhin definiert sein
   out="$(grep -A6 'modelData.name !== modelData.displayPath' "$ROOT/Panel.qml")"
-  assert_contains "$out" "root.shortPath(modelData.displayPath)"
+  assert_contains "$out" "root.fitPath(modelData.displayPath, rowLine.width - rowMarker.width, pathMetrics)"
+
+  fit_count="$(grep -c 'function fitPath(p, availableWidth, metrics)' "$ROOT/Panel.qml")"
+  assert_eq "$fit_count" "1"
 
   def_count="$(grep -c 'function shortPath(p)' "$ROOT/Panel.qml")"
   assert_eq "$def_count" "1"
@@ -260,6 +272,91 @@ test_shortpath_segmentarithmetik() {
   # wie ohne den Slash (der abgeschnittene Fall aus dem Kommentar oben).
   assert_eq "$(short_path_bash '~/Development/Sources/Extern/shannon/')" \
     "${ellipsis}/Sources/Extern/shannon"
+}
+
+test_pfadleiter_kandidaten() {
+  # pathCandidates() in Panel.qml ist reine String-Arithmetik ohne
+  # Datei-IO -- dieselbe Einschraenkung wie bei
+  # test_shortpath_segmentarithmetik oben, aus demselben Grund (siehe
+  # dort): Panel.qml importiert Quickshell.Io und qs.Commons/qs.Ui, die
+  # ausserhalb der laufenden Omarchy-Shell nicht aufloesbar sind.
+  #
+  # ACHTUNG (ehrlich, nicht schoengeredet): dies ist KEIN Aufruf der
+  # echten QML-Funktion. Was hier steht, ist eine PARALLELE Nachrechnung
+  # derselben Leiter-Arithmetik in Bash: drei Stufen (drei/zwei/ein
+  # Segment), jede Stufe dieselbe Rechenregel wie shortPath() mit einer
+  # variablen Segmentzahl statt der festen 3, mit aufeinanderfolgenden
+  # Duplikaten (der Pfad hat gar nicht so viele Segmente, dass bei dieser
+  # Stufe etwas wegfiele) herausgefiltert. Sie deckt die Rechenregel ab --
+  # nicht den tatsaechlich in Panel.qml ausgefuehrten Bytecode. Eine
+  # Aenderung an pathCandidates(), die diese Rechenregel nicht mitaendert,
+  # bleibt fuer DIESEN Test unsichtbar; test_pfad_fallback_wird_gekuerzt
+  # (Funktionssignaturen und Aufrufstelle) plus
+  # test_textmetrics_traegt_labelschrift plus qmllint plus die visuelle
+  # Kontrolle im Panel schliessen diese Luecke.
+  ellipsis="$(printf '…')"
+
+  segments_at_most_bash() {
+    local p="$1" n="$2" s
+    if [ "${#p}" -gt 1 ] && [ "${p: -1}" = "/" ]; then s="${p%/}"; else s="$p"; fi
+    local segs=()
+    IFS='/' read -ra segs <<< "$s"
+    local total="${#segs[@]}"
+    if [ "$total" -le "$n" ]; then printf '%s' "$p"; return 0; fi
+    local start=$((total - n))
+    local lastn=("${segs[@]:$start:$n}")
+    local joined
+    joined="$(IFS=/; printf '%s' "${lastn[*]}")"
+    printf '%s/%s' "$ellipsis" "$joined"
+  }
+
+  path_candidates_bash() {
+    local p="$1" n cur prev=""
+    for n in 3 2 1; do
+      cur="$(segments_at_most_bash "$p" "$n")"
+      if [ "$n" -eq 3 ] || [ "$cur" != "$prev" ]; then printf '%s\n' "$cur"; fi
+      prev="$cur"
+    done
+  }
+
+  # Fuenf Segmente (dasselbe Beispiel wie in test_shortpath_segmentarithmetik):
+  # alle drei Stufen sind voneinander verschieden und tragen alle das
+  # "…/"-Praefix -- genau die drei-, zwei- und einsegmentigen Formen.
+  mapfile -t got5 < <(path_candidates_bash '~/Development/Sources/Extern/shannon')
+  assert_eq "${#got5[@]}" "3"
+  assert_eq "${got5[0]}" "${ellipsis}/Sources/Extern/shannon"
+  assert_eq "${got5[1]}" "${ellipsis}/Extern/shannon"
+  assert_eq "${got5[2]}" "${ellipsis}/shannon"
+
+  # Zwei Segmente: die Drei-Segment-Stufe ist identisch mit der
+  # Zwei-Segment-Stufe (beide der unveraenderte Pfad) -- also KEINE eigene
+  # Drei-Segment-Kandidatin, nur zwei Eintraege insgesamt.
+  mapfile -t got2 < <(path_candidates_bash '~/foo')
+  assert_eq "${#got2[@]}" "2"
+  assert_eq "${got2[0]}" "~/foo"
+  assert_eq "${got2[1]}" "${ellipsis}/foo"
+
+  # Ein einzelnes Segment: nichts zum Wegwerfen, ein einziger Eintrag.
+  mapfile -t got1 < <(path_candidates_bash '~')
+  assert_eq "${#got1[@]}" "1"
+  assert_eq "${got1[0]}" "~"
+}
+
+test_textmetrics_traegt_labelschrift() {
+  # G8: fitPath() misst jede Kandidatin mit dem TextMetrics-Element, das
+  # die Aufrufstelle uebergibt -- eine TextMetrics mit einer anderen
+  # Schriftfamilie oder -groesse als das Label misst eine Breite, die mit
+  # der tatsaechlich gerenderten nichts zu tun hat, und die Messung waere
+  # bedeutungslos. Das TextMetrics-Element in rowLine muss deshalb
+  # woertlich dieselbe Familie und Groesse tragen wie das Label
+  # (root.fontFam / Style.font.body).
+  block="$(sed -n '/id: rowLine/,/^                }/p' "$ROOT/Panel.qml")"
+  tm_count="$(printf '%s' "$block" | grep -c 'TextMetrics {')"
+  assert_eq "$tm_count" "1"
+
+  tm="$(printf '%s' "$block" | grep -A3 'TextMetrics {')"
+  assert_contains "$tm" "font.family: root.fontFam"
+  assert_contains "$tm" "font.pixelSize: Style.font.body"
 }
 
 test_laufanzeige_steht_nicht_im_elidierten_text() {

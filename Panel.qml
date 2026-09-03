@@ -192,10 +192,68 @@ Panel {
   // Funktion bleibt robust und schneidet einen einzelnen schliessenden
   // Slash vor dem Split ab, damit kein leeres Segment mitzaehlt.
   function shortPath(p) {
+    return root.segmentsAtMost(p, 3)
+  }
+
+  // G8 (Fix nach Screenshot-Fund): shortPath() kappt zuverlaessig auf
+  // hoechstens drei Segmente, aber wenn selbst DAS noch nicht in die Zeile
+  // passt, schlug bisher ElideLeft mitten in einem Segment zu -- ein
+  // dreisegmentiger Konfigurationspfad wurde so zu "\u2026nfig/opencode",
+  // einer bedeutungslosen Zeichenkette, statt ein ganzes Segment
+  // wegzulassen. Die Behebung wirft ab jetzt GANZE Segmente von links weg,
+  // bevor ElideLeft ueberhaupt zum Zug kommt.
+  //
+  // segmentsAtMost(p, n) ist dieselbe Rechenregel wie shortPath() oben,
+  // nur mit einer variablen Stufe n statt der fest verdrahteten 3 --
+  // shortPath(p) ist nichts anderes als segmentsAtMost(p, 3). Eigene
+  // Funktion statt Inline-Code an der Aufrufstelle, weil pathCandidates()
+  // unten dieselbe Rechenregel dreimal braucht (n = 3, 2, 1).
+  function segmentsAtMost(p, n) {
     var s = (p.length > 1 && p.endsWith("/")) ? p.slice(0, -1) : p
     var segs = s.split("/")
-    if (segs.length <= 3) return p
-    return "\u2026/" + segs.slice(-3).join("/")
+    if (segs.length <= n) return p
+    return "\u2026/" + segs.slice(-n).join("/")
+  }
+
+  // Die Kandidatenleiter fuer eine zu schmale Zeile: von drei Segmenten
+  // (identisch mit shortPath(p)) ueber zwei bis zu einem einzigen, jede
+  // Stufe mit dem "\u2026/"-Praefix, sobald dabei tatsaechlich etwas
+  // abgeschnitten wurde. Zwei aufeinanderfolgende Stufen liefern denselben
+  // Text, wenn der Pfad gar nicht so viele Segmente hat, dass bei DIESER
+  // Stufe schon etwas wegfiele -- "~/foo" hat nur zwei Segmente: die
+  // Drei-Segment-Stufe UND die Zwei-Segment-Stufe sind beide der
+  // unveraenderte Pfad. Solche Duplikate werden herausgefiltert, sonst
+  // bekaeme ein zweisegmentiger Pfad eine "Drei-Segment"-Kandidatin, die es
+  // inhaltlich gar nicht gibt (siehe test_pfadleiter_kandidaten unten). Ein
+  // einzelnes Segment liefert immer nur einen einzigen Eintrag: da gibt es
+  // nichts mehr wegzuwerfen.
+  function pathCandidates(p) {
+    var out = []
+    for (var n = 3; n >= 1; n--) {
+      var c = root.segmentsAtMost(p, n)
+      if (out.length === 0 || out[out.length - 1] !== c) out.push(c)
+    }
+    return out
+  }
+
+  // Waehlt aus pathCandidates() die BREITESTE Kandidatin, die noch in
+  // availableWidth passt -- gemessen mit dem TextMetrics-Element, das die
+  // Aufrufstelle uebergibt. Dieses TextMetrics muss dieselbe Schrift
+  // tragen wie das Label, sonst misst es eine andere Breite als die, die
+  // tatsaechlich gerendert wird (siehe pathMetrics an der Aufrufstelle
+  // unten: font.family und font.pixelSize sind woertlich dieselben wie am
+  // Label). Passt selbst die letzte Kandidatin (ein einzelnes Segment)
+  // nicht, bleibt nichts mehr zum Wegwerfen -- fitPath() liefert sie
+  // trotzdem zurueck, und ElideLeft an der Text-Eigenschaft selbst (siehe
+  // rowLine unten) bleibt als letztes Netz stehen und schneidet in diesem
+  // einen verbleibenden Fall mitten im Zeichen ab.
+  function fitPath(p, availableWidth, metrics) {
+    var candidates = root.pathCandidates(p)
+    for (var i = 0; i < candidates.length; i++) {
+      metrics.text = candidates[i]
+      if (metrics.advanceWidth <= availableWidth) return candidates[i]
+    }
+    return candidates[candidates.length - 1]
   }
 
   readonly property string barLabelMode: String(root.setting("barLabel", "Icon"))
@@ -775,12 +833,15 @@ Panel {
                 // es nur noch diese eine Zeile: einen echten Namen (kurz,
                 // elidiert praktisch nie, NIE gekuerzt) oder, wenn keiner
                 // da ist, der Pfad-Fallback -- der laeuft durch
-                // root.shortPath() (siehe dort) und zeigt hoechstens die
-                // letzten drei Segmente. ElideLeft bleibt zusaetzlich
-                // stehen (statt ElideRight), damit bei einem selbst dann
-                // noch zu breiten Rest das ENDE erhalten bleibt (der
-                // aussagekraeftige Teil) und die Ellipse vorne sitzt; der
-                // volle, absolute Pfad (nicht die Tilde-Form, nicht
+                // root.fitPath() (siehe dort, G8) und waehlt die breiteste
+                // der hoechstens drei Kandidaten (drei/zwei/ein Segment),
+                // die noch in die verfuegbare Breite passt. ElideLeft
+                // bleibt zusaetzlich stehen (statt ElideRight) als
+                // allerletztes Netz, falls selbst ein einzelnes Segment
+                // noch nicht passt -- REGEL, NICHT DEKORATION: sie ist die
+                // einzige Absicherung fuer genau diesen Grenzfall, ihr
+                // Entfernen faellt in test_projektzeile_elidiert_links auf.
+                // Der volle, absolute Pfad (nicht die Tilde-Form, nicht
                 // gekuerzt) steht im Hover-Tooltip auf rowMouse.
                 // Marker und Beschriftung sind ZWEI Texte, nicht einer:
                 // ElideLeft kuerzt von links, und in einer gemeinsamen
@@ -799,9 +860,42 @@ Panel {
                     font.pixelSize: Style.font.body
                   }
 
+                  // G8: dieselbe Schrift wie das Label darunter -- eine
+                  // TextMetrics mit einer anderen Familie/Groesse misst
+                  // eine Breite, die mit der tatsaechlich gerenderten
+                  // nichts zu tun hat, und fitPath() waehlt dann anhand
+                  // einer bedeutungslosen Zahl. Rein rechnerisches Element
+                  // ohne eigene Flaeche -- als Kind eines Row ohne Wirkung
+                  // auf dessen Layout.
+                  TextMetrics {
+                    id: pathMetrics
+                    font.family: root.fontFam
+                    font.pixelSize: Style.font.body
+                  }
+
+                  // G8: dieselbe Breite ("rowLine.width - rowMarker.width")
+                  // geht zweimal in dieses Element ein -- einmal als
+                  // "width" unten, einmal als drittes Argument von
+                  // fitPath(). KEINE Bindungsschleife: beide lesen
+                  // ausschliesslich rowLine.width und rowMarker.width,
+                  // keines der beiden liest die "width" DIESES Elements
+                  // zurueck -- die Richtung "Text.width haengt von
+                  // rowLine.width ab" bleibt einseitig, es entsteht keine
+                  // Rueckrichtung "Text.width haengt von Text.text ab, der
+                  // wiederum von Text.width abhaengt". fitPath() selbst
+                  // schreibt zwar in pathMetrics.text (ein fremdes Element,
+                  // keine erneute Auswertung dieser "text"-Bindung), aber
+                  // der Lesezugriff auf pathMetrics.advanceWidth macht
+                  // advanceWidth zu einer Abhaengigkeit dieser Bindung --
+                  // ein zusaetzlicher, konvergierender Nachlauf ist deshalb
+                  // moeglich (siehe Abschlussbericht fuer das, was der
+                  // Shell-Log dazu tatsaechlich zeigte), eine echte, sich
+                  // selbst aufschaukelnde Schleife waere nur moeglich, wenn
+                  // diese "text"-Bindung selbst erneut gelesen wuerde --
+                  // was hier nirgends geschieht.
                   Text {
                     width: rowLine.width - rowMarker.width
-                    text: (modelData.name !== modelData.displayPath ? modelData.name : root.shortPath(modelData.displayPath))
+                    text: (modelData.name !== modelData.displayPath ? modelData.name : root.fitPath(modelData.displayPath, rowLine.width - rowMarker.width, pathMetrics))
                     color: root.barForeground
                     font.family: root.fontFam
                     font.pixelSize: Style.font.body
