@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.0 -- 2026-10-13
+
+The model picker now shows loading and save states, initializes correctly
+when its catalog arrives asynchronously, and makes opencode's default model
+reachable from the keyboard. Model selections close only after a successful
+store write, while store and launch failures remain visible to the user.
+
+Starring a model now reuses the local catalog instead of contacting every
+provider. Cached catalogs are validated before use and receive current star
+state on every read. Internal grouping maps no longer inherit JavaScript
+prototype keys, and second-window confirmation is limited to projects that
+already have a running window.
+
 ## 1.0.1 -- 2026-09-03
 
 The panel footer now carries the plugin's version, bottom right, in

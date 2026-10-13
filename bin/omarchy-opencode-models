@@ -70,45 +70,65 @@ cache_fresh() {
   [ "$((now - mtime))" -lt "$age_limit" ]
 }
 
-serve_cache() {  # gibt den Cache mit stale-Markierung aus, oder none
-  local data
+serve_cache() {  # serve_cache <stale>; gibt validierten Cache aus, oder 1 wenn keiner existiert
+  local stale="$1" data rc ids capped id
+  [ -L "$CACHE" ] || [ -e "$CACHE" ] || return 1
   if cache_is_invalid; then
     emit_error "cache-not-a-file"
     return 0
   fi
-  if [ -f "$CACHE" ] && data="$(read_capped "$CACHE" "$MAX_FILE")"; then
-    printf '%s' "$data" | "$BIN_JQ" -c '.stale = true | .source = "cache"'
+  rc=0
+  data="$(read_capped "$CACHE" "$MAX_FILE")" || rc=$?
+  if [ "$rc" = 8 ]; then
+    emit_error "cache-too-large"
+    return 0
+  elif [ "$rc" != 0 ]; then
+    emit_error "cache-unreadable"
     return 0
   fi
-  return 1
+
+  # Ein Cache ist kein Vertrauensanker. Nur die von diesem Skript erzeugte
+  # Form wird akzeptiert; besonders wichtig sind echte Modellobjekte mit
+  # syntaktisch gueltigen IDs. provider/label/starred werden anschliessend
+  # ohnehin neu erzeugt, damit Sterne immer aus dem aktuellen Store kommen.
+  if ! printf '%s' "$data" | "$BIN_JQ" -e '
+      type == "object"
+      and (.models | type == "array" and length > 0)
+      and (.models | all(type == "object" and (.id | type == "string")))
+      and ((.capped // false) | type == "boolean")
+    ' >/dev/null 2>&1; then
+    emit_error "cache-invalid"
+    return 0
+  fi
+
+  # @tsv escaped Steuerzeichen, bevor Bash nach Zeilen trennt. Ohne diese
+  # Huelle wuerde eine einzelne ID mit eingebettetem Zeilenumbruch als zwei
+  # scheinbar gueltige IDs validiert und anschliessend umgedeutet.
+  ids="$(printf '%s' "$data" | "$BIN_JQ" -r '.models[] | [.id] | @tsv')" || {
+    emit_error "cache-invalid"
+    return 0
+  }
+  while IFS= read -r id; do
+    valid_model_id "$id" || {
+      emit_error "cache-invalid"
+      return 0
+    }
+  done <<< "$ids"
+  capped="$(printf '%s' "$data" | "$BIN_JQ" -r '.capped // false')"
+  printf '%s\n' "$ids" | emit "cache" "$stale" "$capped"
+  return 0
 }
+
+if [ "$refresh" = false ] && cache_fresh; then
+  if serve_cache false; then
+    exit 0
+  fi
+fi
 
 OPENCODE="${OPENCODE_BIN:-$(command -v opencode 2>/dev/null || true)}"
 
-if [ "$refresh" = false ] && cache_fresh; then
-  if cache_is_invalid; then
-    emit_error "cache-not-a-file"
-    exit 0
-  fi
-  # C4: read_capped gibt 8 fuer "ueber der Grenze" und 1 fuer alles andere
-  # (nicht lesbar, head gescheitert) zurueck. Beides zu "cache-too-large"
-  # zusammenzufassen war eine Falschmeldung, gemessen an einer 13 Byte
-  # grossen Datei mit chmod 000: sie kam als "zu gross" an. Wer eine
-  # Berechtigung repariert, statt Platz zu schaffen, braucht den richtigen
-  # Satz.
-  rc=0
-  read_capped "$CACHE" "$MAX_FILE" || rc=$?
-  if [ "$rc" = 8 ]; then
-    emit_error "cache-too-large"; exit 0
-  elif [ "$rc" != 0 ]; then
-    emit_error "cache-unreadable"; exit 0
-  fi
-  echo
-  exit 0
-fi
-
 if [ -z "$OPENCODE" ] || [ ! -x "$OPENCODE" ]; then
-  serve_cache || emit_error "opencode-missing"
+  serve_cache true || emit_error "opencode-missing"
   exit 0
 fi
 
@@ -120,11 +140,11 @@ rc=0
 # des Panels (siehe Design-Dokument).
 raw="$("$BIN_TIMEOUT" -k 5 "$TIMEOUT" "$OPENCODE" models 2>/dev/null | read_stream_capped "$MAX_FILE")" || rc=$?
 if [ "$rc" = 8 ]; then
-  serve_cache || emit_error "models-too-large"
+  serve_cache true || emit_error "models-too-large"
   exit 0
 fi
 if [ "$rc" != 0 ] || [ -z "$raw" ]; then
-  serve_cache || emit_error "models-unavailable"
+  serve_cache true || emit_error "models-unavailable"
   exit 0
 fi
 

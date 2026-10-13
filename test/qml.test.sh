@@ -149,31 +149,13 @@ test_kein_schreibpfad_nach_config_opencode() {
   assert_eq "$bad" ""
 }
 
-test_stern_umschalten_erzwingt_frischen_katalog() {
-  # Ruling 45 (Fix Runde 2, G2): "store star|unstar" schreibt zuverlaessig,
-  # aber "starred" wird von bin/omarchy-opencode-models nur beim
-  # tatsaechlichen Abruf aus opencode neu in den Zwischenspeicher
-  # geschrieben (siehe emit() dort) -- ein Wiedereinlesen OHNE "--refresh"
-  # liefert bei frischem Zwischenspeicher denselben, jetzt veralteten
-  # Stern-Stand zurueck. toggleStar() liest "starred" aus genau dieser
-  # Liste, um zwischen "star" und "unstar" zu entscheiden: ohne "--refresh"
-  # waere "unstar" bis zum naechsten manuellen Aktualisieren unerreichbar,
-  # und ein zweiter Klick haette "star" ein zweites Mal gesendet.
-  #
-  # Nicht ueber Verhalten pruefbar -- kein Bash-Test kann den gerenderten
-  # Stern lesen --, wohl aber ueber den Kommandostring selbst, dieselbe
-  # Methode wie bei der Prozess-Substitution und den absoluten
-  # Interpreter-Pfaden.
-  # Kommentarzeilen ausgeschnitten, bevor geprueft wird: ein Kommentar, der
-  # "--refresh" nur ERWAEHNT (wie der direkt daneben stehende, der genau
-  # diese Regel erklaert), darf die Regel nicht faelschlich gruen halten --
-  # gemessen an einer echten Probe (siehe Fix-Runde-2-Report): das
-  # "--refresh" aus der Kommandozeile entfernt, waehrend der erklaerende
-  # Kommentar (der das Wort selbst nennt) stehen blieb, hielt die
-  # ungefilterte Fassung dieser Regel faelschlich gruen.
+test_stern_umschalten_braucht_keinen_provider_refresh() {
+  # Der Cache wird beim Lesen mit den aktuellen Sternen aus dem Store
+  # ueberlagert. Ein Stern-Klick darf daher keinen Provider-Abruf erzwingen.
   out="$(sed -n '/root.storeAction === "star"/,/^      } else {/p' "$ROOT/Panel.qml" \
           | grep -v '^[[:space:]]*//')"
-  assert_contains "$out" "--refresh"
+  assert_contains "$out" 'omarchy-opencode-models") + " list --json"'
+  assert_not_contains "$out" "--refresh"
 }
 
 test_displayPath_erscheint_hoechstens_einmal() {
@@ -1082,20 +1064,11 @@ test_favoriten_zeilen_zeigen_volle_id_ohne_dritte_ebene() {
 test_favoriten_klappt_beim_oeffnen_immer_auf() {
   # Regel "beim Oeffnen immer aufgeklappt, wenn sie existiert": ein
   # zugeklapptes Favoriten-Kaestchen waere keine Abkuerzung. Die Zusicherung
-  # muss UNABHAENGIG von "currentModel" gelten -- die Zeile
-  # "sheet.expandedFavourites = hasStar" darf deshalb NICHT tiefer
-  # eingerueckt sein als "sheet.expandedProviders = expanded" (6
-  # Leerzeichen, direkt im "if (sheet.visible)"-Block). Eine Verschiebung
-  # in den "if (found)"- oder "if (sheet.currentModel !== \"\")"-Block waere
-  # 2 bzw. 4 Leerzeichen tiefer -- der ^...$-Anker (nicht nur "contains")
-  # ist hier bewusst noetig: eine 8-Leerzeichen-Zeile ENTHAELT als
-  # Teilkette auch 6 aufeinanderfolgende Leerzeichen vor dem Text, eine
-  # reine assert_contains wuerde die Verschiebung also NICHT bemerken.
-  indent_count="$(grep -c '^      sheet.expandedFavourites = hasStar$' "$ROOT/ModelSheet.qml")"
-  assert_eq "$indent_count" "1"
-
-  ov="$(sed -n '/^  onVisibleChanged: {/,/^  }/p' "$ROOT/ModelSheet.qml")"
-  assert_contains "$ov" 'if (sheet.models[si].starred) { hasStar = true; break }'
+  # muss UNABHAENGIG von "currentModel" gelten. Die Initialisierung lebt in
+  # initializePicker(), damit sie nach einem asynchronen Laden erneut laeuft.
+  init="$(sed -n '/^  function initializePicker(resetSearch) {/,/^  }/p' "$ROOT/ModelSheet.qml")"
+  assert_contains "$init" 'if (sheet.models[si].starred) { hasStar = true; break }'
+  assert_contains "$init" 'sheet.expandedFavourites = hasStar'
 
   # Regel Cursor/Duplikat: ein gemerktes UND markiertes Modell steht jetzt
   # zweimal in "rows" (Favoriten + Anbietergruppe) -- die Cursor-Suche muss
@@ -1109,8 +1082,8 @@ test_favoriten_klappt_beim_oeffnen_immer_auf() {
   # Bedingung im Code entfernt, waehrend der erklaerende Kommentar
   # unveraendert blieb, hielt die ungefilterte Fassung dieser Pruefung
   # faelschlich gruen.
-  ov_code="$(printf '%s' "$ov" | grep -v '^[[:space:]]*//')"
-  assert_contains "$ov_code" '!rows[j].favourites'
+  init_code="$(printf '%s' "$init" | grep -v '^[[:space:]]*//')"
+  assert_contains "$init_code" '!rows[j].favourites'
 }
 
 test_favoriten_tastatur_und_klick_loesen_toggleFavourites_aus() {
@@ -1135,6 +1108,49 @@ test_modelsheet_frei_von_nicht_ascii_bytes() {
   # Sonderzeichen an JEDER Stelle auffliegt.
   bad="$(LC_ALL=C grep -nP '[^\x00-\x7F]' "$ROOT/ModelSheet.qml" || true)"
   assert_eq "$bad" ""
+}
+
+test_picker_hat_ladezustand_und_initialisiert_nach_async_antwort() {
+  full="$(cat "$ROOT/ModelSheet.qml")"
+  panel="$(cat "$ROOT/Panel.qml")"
+  assert_contains "$panel" 'loading: modelsProc.running'
+  assert_contains "$full" 'if (sheet.loading) return "Loading models..."'
+  assert_contains "$full" 'onModelsChanged: {'
+  assert_contains "$full" 'sheet.initializePicker(false)'
+  assert_contains "$full" 'if (sheet.visible && !sheet.loading && !sheet.pickerInitialized)'
+}
+
+test_default_modell_ist_per_tastatur_erreichbar() {
+  full="$(cat "$ROOT/ModelSheet.qml")"
+  assert_contains "$full" 'sheet.defaultFocused = true'
+  assert_contains "$full" 'if (sheet.defaultFocused) {'
+  assert_contains "$full" 'sheet.cleared()'
+  assert_contains "$full" 'color: sheet.defaultFocused'
+  assert_contains "$full" '? Style.selectedFill'
+}
+
+test_store_und_start_pruefen_exitcode_und_zeigen_storefehler_im_picker() {
+  panel="$(cat "$ROOT/Panel.qml")"
+  sheet="$(cat "$ROOT/ModelSheet.qml")"
+  assert_contains "$panel" 'onExited: function(exitCode, exitStatus)'
+  assert_eq "$(grep -c 'if (exitCode !== 0)' "$ROOT/Panel.qml")" "2"
+  assert_contains "$panel" 'root.storeStderr = String(storeStderrCollector.text || "").trim()'
+  assert_contains "$panel" 'root.launchStderr = String(launchStderrCollector.text || "").trim()'
+  assert_contains "$panel" 'actionError: root.launchError'
+  assert_contains "$sheet" 'if (sheet.actionError !== "") return sheet.actionError'
+}
+
+test_zweites_fenster_bestaetigt_nur_fuer_laufendes_projekt() {
+  assert_contains "$(cat "$ROOT/Panel.qml")" \
+    'second && root.confirmNewWindow && entry && entry.running'
+}
+
+test_gruppierungs_maps_haben_keinen_objekt_prototyp() {
+  full="$(cat "$ROOT/ModelSheet.qml")"
+  assert_contains "$full" 'var buckets = Object.create(null)'
+  assert_contains "$full" 'var subBuckets = Object.create(null)'
+  assert_contains "$full" 'property var expandedProviders: Object.create(null)'
+  assert_contains "$full" 'property var expandedSubgroups: Object.create(null)'
 }
 
 test_version_steht_immer_unten_rechts() {

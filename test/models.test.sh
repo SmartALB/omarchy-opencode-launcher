@@ -199,6 +199,43 @@ test_sterne_stehen_oben_und_sind_markiert() {
   assert_eq "$(printf '%s' "$out" | jq -r '.models[0].starred')" "true"
 }
 
+test_cache_ueberlagert_sterne_ohne_provider_neu_zu_fragen() {
+  stub_opencode
+  "$MODELS" list --json >/dev/null
+  assert_eq "$(stub_calls opencode)" "1"
+
+  "$DIR/../bin/omarchy-opencode-store" star lmstudio/openai/gpt-oss-20b >/dev/null
+  out="$("$MODELS" list --json)"
+
+  assert_eq "$(stub_calls opencode)" "1"
+  assert_eq "$(printf '%s' "$out" | jq -r '.models[0].id')" "lmstudio/openai/gpt-oss-20b"
+  assert_eq "$(printf '%s' "$out" | jq -r '.models[0].starred')" "true"
+}
+
+test_kaputter_cache_wird_nicht_als_katalog_ausgegeben() {
+  mkdir -p "$(dirname "$(cachefile)")"
+  printf '%s' '{"models":"not-an-array"}' > "$(cachefile)"
+  out="$("$MODELS" list --json)"
+  assert_eq "$(printf '%s' "$out" | jq -r '.error')" "cache-invalid"
+  assert_eq "$(printf '%s' "$out" | jq -r '.models | length')" "0"
+}
+
+test_cache_mit_ungueltiger_modell_id_wird_abgelehnt() {
+  mkdir -p "$(dirname "$(cachefile)")"
+  printf '%s' '{"capped":false,"models":[{"id":"constructor"}]}' > "$(cachefile)"
+  out="$("$MODELS" list --json)"
+  assert_eq "$(printf '%s' "$out" | jq -r '.error')" "cache-invalid"
+  assert_not_contains "$out" '"id":"constructor"'
+}
+
+test_cache_id_mit_zeilenumbruch_wird_nicht_in_zwei_ids_umgedeutet() {
+  mkdir -p "$(dirname "$(cachefile)")"
+  printf '%s' '{"capped":false,"models":[{"id":"good/one\ngood/two"}]}' > "$(cachefile)"
+  out="$("$MODELS" list --json)"
+  assert_eq "$(printf '%s' "$out" | jq -r '.error')" "cache-invalid"
+  assert_eq "$(printf '%s' "$out" | jq -r '.models | length')" "0"
+}
+
 # Ruling 19: dieselbe Datei-Art-Pruefung wie bei omarchy-opencode-store fuer
 # seine Zustandsdatei -- ein Symlink am Cache-Pfad wuerde "[ -f "$CACHE" ]"
 # (das Symlinks folgt) und damit cache_fresh() bestehen, und read_capped

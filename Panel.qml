@@ -15,7 +15,7 @@ Panel {
   // Zweite Kopie dessen, was manifest.json sagt -- QML kann das Manifest
   // nicht lesen (Omarchys PluginRegistry ist eine Instanz, kein Singleton).
   // test_panel_version_entspricht_dem_manifest haelt beide zusammen.
-  readonly property string pluginVersion: "1.0.2"
+  readonly property string pluginVersion: "1.1.0"
 
   // Quality (Fix Runde 1): sechs Stellen lasen bisher "root.bar.fontFamily"
   // direkt -- "bar" wird erst in Loader.onLoaded eingesetzt, der ERSTE
@@ -100,20 +100,12 @@ Panel {
   property string sheetPath: ""
   property int cursor: 0
   // Wer den laufenden storeProc-Aufruf ausgeloest hat: das Setzen/Loeschen
-  // eines Modells (aktualisiert danach die Projektliste, weil deren
-  // "modelLabel" sich geaendert hat) oder das Umschalten eines Sterns
-  // (fragt danach die Modell-Liste MIT "--refresh" neu ab). Das "--refresh"
-  // ist Pflicht, keine Kosmetik (G2, Fix Runde 2): "starred" wird nur beim
-  // tatsaechlichen Abruf von opencode neu in bin/omarchy-opencode-models'
-  // Zwischenspeicher geschrieben -- ein Wiedereinlesen OHNE "--refresh"
-  // liefert bei einem noch frischen Zwischenspeicher weiterhin den alten
-  // Stern-Stand zurueck, und toggleStar() liest "starred" aus genau dieser
-  // Liste, um zwischen "star" und "unstar" zu entscheiden. Ein Feld statt
-  // zwei getrennter Prozesse: beides sind kurze, seltene Schreibzugriffe
-  // auf denselben Store, ein zweiter Process-Typ wuerde nur Component.
-  // onDestruction um einen weiteren Eintrag verlaengern, ohne dass irgendwo
-  // zwei solche Aufrufe je gleichzeitig liefen.
+  // eines Modells oder das Umschalten eines Sterns. Der Modellkatalog legt
+  // nur IDs im Cache ab und ueberlagert die Sterne bei JEDEM Lesen frisch
+  // aus dem Store; ein Stern braucht deshalb keinen Provider-Netzaufruf.
   property string storeAction: ""
+  property string storeStderr: ""
+  property string launchStderr: ""
 
   // C3 (Fix Runde 1): Umschalt+Eingabetaste bei "confirmNewWindow" musste
   // bisher NICHTS merken -- die zweite Umschalt+Eingabetaste nahm denselben
@@ -364,40 +356,51 @@ Panel {
   Process {
     id: storeProc
     stderr: StdioCollector {
+      id: storeStderrCollector
       waitForEnd: true
       onStreamFinished: {
-        var m = String(text || "").trim()
-        if (m !== "") root.launchError = m.split("\n").pop()
+        root.storeStderr = String(text || "").trim()
       }
     }
-    onExited: {
+    onExited: function(exitCode, exitStatus) {
+      root.storeStderr = String(storeStderrCollector.text || "").trim()
+      if (exitCode !== 0) {
+        root.launchError = root.storeStderr !== ""
+          ? root.storeStderr.split("\n").pop()
+          : "Could not save the model setting (exit " + exitCode + ")"
+        root.storeAction = ""
+        return
+      }
       if (root.storeAction === "star") {
-        // G2 (Fix Runde 2): OHNE "--refresh" liest dieser Aufruf bei einem
-        // noch frischen Zwischenspeicher denselben "starred"-Stand zurueck,
-        // den der Klick gerade aendern sollte -- der Stern haette dann bis
-        // zum naechsten Aktualisieren gelogen, und ein zweiter Klick haette
-        // "star" ein zweites Mal statt "unstar" gesendet (siehe der
-        // Kommentar bei "storeAction" oben).
         modelsProc.running = false
-        modelsProc.command = root.runnerOut(root.envPrefix + root.scriptCmd("omarchy-opencode-models") + " list --json --refresh")
+        modelsProc.command = root.runnerOut(root.envPrefix + root.scriptCmd("omarchy-opencode-models") + " list --json")
         modelsProc.running = true
       } else {
         projectsProc.running = false
         projectsProc.running = true
+        root.closeSheet()
       }
+      root.storeAction = ""
     }
   }
 
   Process {
     id: launchProc
     stderr: StdioCollector {
+      id: launchStderrCollector
       waitForEnd: true
       onStreamFinished: {
-        var m = String(text || "").trim()
-        if (m !== "") root.launchError = m.split("\n").pop()
+        root.launchStderr = String(text || "").trim()
       }
     }
-    onExited: {
+    onExited: function(exitCode, exitStatus) {
+      root.launchStderr = String(launchStderrCollector.text || "").trim()
+      if (exitCode !== 0) {
+        root.launchError = root.launchStderr !== ""
+          ? root.launchStderr.split("\n").pop()
+          : "Could not open opencode (exit " + exitCode + ")"
+        return
+      }
       projectsProc.running = false
       projectsProc.running = true
     }
@@ -416,6 +419,7 @@ Panel {
     if (entry.model) c += " --model " + root.shellEscape(entry.model)
     if (newWindow) c += " --new-window"
     root.launchError = ""
+    root.launchStderr = ""
     launchProc.running = false
     launchProc.command = root.runnerErr(c)
     launchProc.running = true
@@ -427,6 +431,8 @@ Panel {
     // ausgeschlossener) leerer sheetPath in ".projects['']".
     if (!path || storeProc.running) return
     root.storeAction = "model"
+    root.storeStderr = ""
+    root.launchError = ""
     var c = id === ""
       ? root.scriptCmd("omarchy-opencode-store") + " unset " + root.shellEscape(path)
       : root.scriptCmd("omarchy-opencode-store") + " set " + root.shellEscape(path)
@@ -446,6 +452,8 @@ Panel {
   function toggleStar(id, currentlyStarred) {
     if (storeProc.running) return
     root.storeAction = "star"
+    root.storeStderr = ""
+    root.launchError = ""
     var c = root.scriptCmd("omarchy-opencode-store") + " " + (currentlyStarred ? "unstar" : "star")
       + " " + root.shellEscape(id)
     storeProc.running = false
@@ -488,6 +496,7 @@ Panel {
   // onVisibleChanged (siehe ModelSheet.qml) klappt daraus genau die Gruppe
   // auf, die dieses Modell traegt.
   function openSheetFor(path, modelId) {
+    root.launchError = ""
     root.sheetPath = path
     sheet.currentModel = modelId || ""
     if (root.models.length === 0) modelsProc.running = true
@@ -671,7 +680,7 @@ Panel {
           // Projekt, das beim ersten Mal gemeint war (confirmArmedPath) --
           // ein Cursorwechsel dazwischen (siehe oben, disarmConfirm())
           // nimmt sie zurueck.
-          if (second && root.confirmNewWindow) {
+          if (second && root.confirmNewWindow && entry && entry.running) {
             if (entry && root.confirmArmedPath === entry.path) {
               root.disarmConfirm()
               root.openProject(entry, true)
@@ -1074,13 +1083,15 @@ Panel {
       id: sheet
       anchors.fill: parent
       models: root.models
+      loading: modelsProc.running
       stale: root.modelsStale
       errorCode: root.modelsError
-      busy: storeProc.running
+      actionError: root.launchError
+      busy: storeProc.running || modelsProc.running
       fg: root.barForeground
       fontFam: root.fontFam
-      onPicked: function (id) { root.setModel(root.sheetPath, id); root.closeSheet() }
-      onCleared: { root.setModel(root.sheetPath, ""); root.closeSheet() }
+      onPicked: function (id) { root.setModel(root.sheetPath, id) }
+      onCleared: root.setModel(root.sheetPath, "")
       onClosed: root.closeSheet()
       onStarToggled: function (id) {
         var m = root.findModel(id)

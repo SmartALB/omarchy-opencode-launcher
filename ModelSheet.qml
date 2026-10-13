@@ -35,6 +35,8 @@ Item {
   property var models: []
   property bool stale: false
   property string errorCode: ""
+  property string actionError: ""
+  property bool loading: false
   property bool busy: false
   property string filter: ""
   property int cursor: 0
@@ -46,6 +48,8 @@ Item {
   // nicht -- ohne ihn koennte "genau die Gruppe mit dem gemerkten Modell
   // aufklappen" nicht entschieden werden.
   property string currentModel: ""
+  property bool pickerInitialized: false
+  property bool defaultFocused: false
 
   signal picked(string id)
   signal cleared()
@@ -64,10 +68,10 @@ Item {
   // Objekt provider -> true. Ein Objekt statt eines Arrays, weil das
   // Nachschlagen "ist dieser Anbieter aufgeklappt" so ein einzelner
   // Property-Zugriff bleibt, nicht ein Array-Scan pro Kopfzeile.
-  property var expandedProviders: ({})
+  property var expandedProviders: Object.create(null)
 
   function toggleHeader(provider) {
-    var next = {}
+    var next = Object.create(null)
     for (var k in sheet.expandedProviders) next[k] = sheet.expandedProviders[k]
     next[provider] = !next[provider]
     sheet.expandedProviders = next
@@ -81,11 +85,11 @@ Item {
   // enthalten selbst nie "/" (beide sind bereits abgetrennte ID-Segmente
   // bzw. ein Namensteil vor dem ersten Bindestrich), der Schluessel ist
   // also nie mehrdeutig.
-  property var expandedSubgroups: ({})
+  property var expandedSubgroups: Object.create(null)
 
   function toggleSubgroup(provider, subgroup) {
     var key = provider + "/" + subgroup
-    var next = {}
+    var next = Object.create(null)
     for (var k in sheet.expandedSubgroups) next[k] = sheet.expandedSubgroups[k]
     next[key] = !next[key]
     sheet.expandedSubgroups = next
@@ -194,7 +198,7 @@ Item {
   // "indent: 2".
   function buildGroupedRows(models, expanded) {
     var order = []
-    var buckets = {}
+    var buckets = Object.create(null)
     for (var i = 0; i < models.length; i++) {
       var m = models[i]
       if (!buckets[m.provider]) { buckets[m.provider] = []; order.push(m.provider) }
@@ -230,7 +234,7 @@ Item {
       // Regel wie fuer die Anbieter-Reihenfolge oben, nur eine Ebene
       // tiefer.
       var subOrder = []
-      var subBuckets = {}
+      var subBuckets = Object.create(null)
       for (var si = 0; si < bucket.length; si++) {
         var mm = bucket[si]
         var segs = String(mm.id).split("/")
@@ -372,6 +376,9 @@ Item {
   // veroeffentlichten Schwesterwidget smartalb.vpn und mit dem Publikum
   // des Marktplatzes.
   readonly property string statusText: {
+    if (sheet.loading) return "Loading models..."
+    if (sheet.busy) return "Saving..."
+    if (sheet.actionError !== "") return sheet.actionError
     if (sheet.errorCode === "opencode-missing") return "opencode is not installed or not executable"
     if (sheet.errorCode === "models-unavailable") return "opencode was unreachable, and there is no cached list"
     if (sheet.errorCode === "models-too-large") return "The model list was too large, and there is no usable cached list"
@@ -382,24 +389,27 @@ Item {
     // eigenen Satz.
     if (sheet.errorCode === "cache-unreadable") return "The cached model list cannot be read (check its permissions)"
     if (sheet.errorCode === "cache-not-a-file") return "The model cache path is not a regular file (a symlink, perhaps)"
+    if (sheet.errorCode === "cache-invalid") return "The cached model list is damaged and must be refreshed"
     if (sheet.errorCode !== "") return "Model list not readable"
     if (sheet.stale) return "List from the cache -- opencode was unreachable"
     if (sheet.models.length === 0) return "No models found"
     return ""
   }
 
-  onVisibleChanged: {
-    if (sheet.visible) {
+  function initializePicker(resetSearch) {
+    if (resetSearch) {
       sheet.filter = ""
       search.text = ""
+    }
+    sheet.defaultFocused = false
       // G7: genau die Gruppe mit dem gemerkten Modell klappt auf, alle
       // anderen bleiben zu -- ohne gemerktes Modell bleibt ALLES zu (leeres
       // Objekt). Das Modell selbst wird ueber die ID in "models" gesucht,
       // nicht blind uebernommen: ein "currentModel", das gar nicht (mehr)
       // in der Liste steht (z.B. ein per Freitext gesetztes, dem Katalog
       // unbekanntes), darf keine Gruppe aufklappen, die es gar nicht gibt.
-      var expanded = {}
-      var expandedSub = {}
+      var expanded = Object.create(null)
+      var expandedSub = Object.create(null)
       var found = null
       if (sheet.currentModel !== "") {
         for (var i = 0; i < sheet.models.length; i++) {
@@ -418,7 +428,7 @@ Item {
           // sichtbar, steht es hinter einer zugeklappten Untergruppen-
           // Kopfzeile -- wir probieren jede Kopfzeile einzeln durch, bis
           // das Modell auftaucht.
-          var probe = sheet.buildGroupedRows(sheet.models, { providers: expanded, subgroups: {} })
+          var probe = sheet.buildGroupedRows(sheet.models, { providers: expanded, subgroups: Object.create(null) })
           var visible = false
           for (var p = 0; p < probe.length; p++) {
             if (probe[p].kind === "model" && probe[p].model.id === sheet.currentModel) { visible = true; break }
@@ -428,7 +438,7 @@ Item {
               var hdr = probe[h]
               if (hdr.kind !== "header" || hdr.subgroup === undefined) continue
               var tryKey = found.provider + "/" + hdr.subgroup
-              var trySub = {}
+              var trySub = Object.create(null)
               trySub[tryKey] = true
               var probe2 = sheet.buildGroupedRows(sheet.models, { providers: expanded, subgroups: trySub })
               var hit = false
@@ -473,10 +483,34 @@ Item {
         }
       }
       sheet.cursor = pos
+      sheet.pickerInitialized = true
+  }
+
+  onVisibleChanged: {
+    if (sheet.visible) {
+      sheet.pickerInitialized = false
+      sheet.initializePicker(true)
+      if (sheet.loading) sheet.pickerInitialized = false
       // Qt.callLater: der Fokus darf erst NACH dem aktuellen Tastendruck
       // (der den Picker ueberhaupt erst geoeffnet hat) wechseln.
       Qt.callLater(function () { if (sheet.visible) search.forceActiveFocus() })
+    } else {
+      sheet.pickerInitialized = false
+      sheet.defaultFocused = false
     }
+  }
+
+  // Beim ersten Oeffnen ist die Modellliste oft noch unterwegs. Sobald die
+  // asynchrone Antwort eintrifft, muss dieselbe Initialisierung wie beim
+  // Oeffnen erneut laufen: aktuelle Gruppe, Favoriten und Cursor duerfen
+  // nicht auf dem anfangs leeren Array beruhen.
+  onModelsChanged: {
+    if (sheet.visible && !sheet.pickerInitialized && sheet.models.length > 0)
+      sheet.initializePicker(false)
+  }
+  onLoadingChanged: {
+    if (sheet.visible && !sheet.loading && !sheet.pickerInitialized)
+      sheet.initializePicker(false)
   }
 
   Rectangle {
@@ -508,7 +542,10 @@ Item {
         width: parent.width
         placeholderText: "Search models"
         foreground: sheet.fg
-        onTextChanged: sheet.filter = text
+        onTextChanged: {
+          sheet.filter = text
+          sheet.defaultFocused = false
+        }
 
         Keys.onEscapePressed: sheet.closed()
         // G1: ein getippter Text, der zu keiner Zeile passt, tat bisher
@@ -533,7 +570,9 @@ Item {
         // toggleFavourites) -- sie traegt weder provider noch subgroup,
         // die Pruefung muss deshalb VOR der subgroup-Pruefung stehen.
         Keys.onReturnPressed: {
-          if (sheet.visibleRows.length > 0) {
+          if (sheet.defaultFocused) {
+            sheet.cleared()
+          } else if (sheet.visibleRows.length > 0) {
             var i = Math.max(0, Math.min(sheet.cursor, sheet.visibleRows.length - 1))
             var row = sheet.visibleRows[i]
             if (row.kind === "header") {
@@ -556,10 +595,21 @@ Item {
         // Zeichen fuer den Filter verloren.
         Keys.onPressed: function (e) {
           if (e.key === Qt.Key_Down) {
-            sheet.cursor = Math.min(sheet.cursor + 1, sheet.visibleRows.length - 1)
+            if (sheet.defaultFocused) {
+              // Schon auf der letzten, festen Default-Zeile.
+            } else if (sheet.visibleRows.length === 0 || sheet.cursor >= sheet.visibleRows.length - 1) {
+              sheet.defaultFocused = true
+            } else {
+              sheet.cursor++
+            }
             e.accepted = true
           } else if (e.key === Qt.Key_Up) {
-            sheet.cursor = Math.max(sheet.cursor - 1, 0)
+            if (sheet.defaultFocused) {
+              sheet.defaultFocused = false
+              sheet.cursor = Math.max(0, sheet.visibleRows.length - 1)
+            } else {
+              sheet.cursor = Math.max(sheet.cursor - 1, 0)
+            }
             e.accepted = true
           } else if (e.text === "*" && sheet.visibleRows.length > 0) {
             var row = sheet.visibleRows[Math.max(0, Math.min(sheet.cursor, sheet.visibleRows.length - 1))]
@@ -588,7 +638,7 @@ Item {
       // fehlerhafter Liste ebenso wie bei einer Sucheingabe ohne Treffer.
       Text {
         width: parent.width
-        visible: sheet.shown.length === 0
+        visible: !sheet.loading && sheet.errorCode === "" && sheet.shown.length === 0
         text: "You can also type a full model id (provider/model) and press Enter."
         color: sheet.fg
         font.family: sheet.fontFam
@@ -613,7 +663,7 @@ Item {
       anchors.bottomMargin: Style.space(4)
       clip: true
       model: sheet.visibleRows
-      currentIndex: sheet.cursor
+      currentIndex: sheet.defaultFocused ? -1 : sheet.cursor
 
       // G7: eine Zeile ist jetzt entweder eine Kopfzeile (kind === "header")
       // oder eine Modellzeile (kind === "model", das eigentliche Modell
@@ -726,6 +776,7 @@ Item {
           enabled: !sheet.busy
           cursorShape: Qt.PointingHandCursor
           onClicked: {
+            sheet.defaultFocused = false
             sheet.cursor = index
             if (row.isHeader) {
               // G10: siehe Keys.onReturnPressed oben -- dieselbe Reihenfolge
@@ -752,7 +803,9 @@ Item {
       anchors.bottom: parent.bottom
       height: Style.spacing.popupRowHeight
       radius: Style.cornerRadius
-      color: defaultMouse.containsMouse && !sheet.busy ? Style.hoverFill : "transparent"
+      color: sheet.defaultFocused
+        ? Style.selectedFill
+        : (defaultMouse.containsMouse && !sheet.busy ? Style.hoverFill : "transparent")
       opacity: sheet.busy ? 0.6 : 1.0
 
       Text {
@@ -769,7 +822,10 @@ Item {
         hoverEnabled: !sheet.busy
         enabled: !sheet.busy
         cursorShape: Qt.PointingHandCursor
-        onClicked: sheet.cleared()
+        onClicked: {
+          sheet.defaultFocused = true
+          sheet.cleared()
+        }
       }
     }
   }
