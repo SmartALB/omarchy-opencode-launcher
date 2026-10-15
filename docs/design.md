@@ -43,8 +43,9 @@ absolute paths to every external program they call.
 
 ## The model as a flag, not a config write
 
-`omarchy-opencode-launch` starts opencode as `opencode -m provider/model`.
-The alternative -- writing the chosen model into `opencode.json` before
+`omarchy-opencode-launch` starts OpenCode V2 with the chosen model in the
+process-local `OPENCODE_CONFIG_CONTENT` environment variable. The alternative
+-- writing the chosen model into `opencode.json` before
 each start -- was rejected for three reasons that all point the same way:
 
 - It is **not this plugin's file**. Overwriting a setting the user (or

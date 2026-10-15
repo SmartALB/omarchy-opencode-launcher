@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1 -- 2026-10-15
+
+Launching a selected model or agent now works with OpenCode V2. Selections are
+passed through process-local `OPENCODE_CONFIG_CONTENT` instead of the removed
+`-m` and `--agent` flags; OpenCode's configuration file remains untouched.
+
 ## 1.1.0 -- 2026-10-13
 
 The model picker now shows loading and save states, initializes correctly

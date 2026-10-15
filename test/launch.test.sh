@@ -15,14 +15,14 @@ setup_launch() {
   mkdir -p "$SANDBOX/proj"
 }
 
-test_start_ohne_modell_enthaelt_kein_m_flag() {
+test_start_ohne_modell_enthaelt_keine_inline_config() {
   setup_launch
   "$LAUNCH" "$SANDBOX/proj" || fail "Start fehlgeschlagen"
   # Minor aus der Review: eine leere Log-Datei erfuellt "-m fehlt" auch dann,
   # wenn ueberhaupt nichts gestartet wurde -- deshalb zusaetzlich pruefen,
   # dass der Aufruf tatsaechlich stattfand.
   assert_eq "$(stub_calls omarchy-launch-or-focus)" "1"
-  assert_not_contains "$(stub_log omarchy-launch-or-focus)" " -m "
+  assert_not_contains "$(stub_log omarchy-launch-or-focus)" "OPENCODE_CONFIG_CONTENT="
 }
 
 test_e_flag_traegt_den_aufgeloesten_opencode_pfad_nicht_bare_opencode() {
@@ -38,10 +38,13 @@ test_e_flag_traegt_den_aufgeloesten_opencode_pfad_nicht_bare_opencode() {
   assert_contains "$(stub_log omarchy-launch-or-focus)" "-e $SANDBOX/stub/opencode"
 }
 
-test_start_mit_modell_enthaelt_das_m_flag() {
+test_start_mit_modell_enthaelt_v2_inline_config() {
   setup_launch
   "$LAUNCH" "$SANDBOX/proj" --model lmstudio/openai/gpt-oss-20b || fail "Start fehlgeschlagen"
-  assert_contains "$(stub_log omarchy-launch-or-focus)" "-m lmstudio/openai/gpt-oss-20b"
+  log="$(stub_log omarchy-launch-or-focus)"
+  assert_contains "$log" "OPENCODE_CONFIG_CONTENT="
+  assert_contains "$log" 'lmstudio/openai/gpt-oss-20b'
+  assert_not_contains "$log" " -m "
 }
 
 test_app_id_ist_das_erste_argument() {
@@ -127,8 +130,9 @@ test_modell_id_mit_klammeraffe_doppelpunkt_tilde_plus_wird_akzeptiert() {
   # einem Folgesegment -- diese ID ist so ein Fall und muss durchgehen.
   "$LAUNCH" "$SANDBOX/proj" --model 'cloudflare-workers-ai/@cf/nvidia/nemotron-3-120b-a12b' \
     || fail "Start mit gueltiger, aber ungewoehnlicher Modell-ID fehlgeschlagen"
-  assert_contains "$(stub_log omarchy-launch-or-focus)" \
-    '-m cloudflare-workers-ai/@cf/nvidia/nemotron-3-120b-a12b'
+  log="$(stub_log omarchy-launch-or-focus)"
+  assert_contains "$log" 'OPENCODE_CONFIG_CONTENT='
+  assert_contains "$log" 'cloudflare-workers-ai/@cf/nvidia/nemotron-3-120b-a12b'
 }
 
 test_modell_id_mit_kommandosubstitution_wird_vor_dem_bauen_abgelehnt() {
@@ -173,7 +177,10 @@ test_continue_und_agent_erscheinen_als_flags() {
   setup_launch
   "$LAUNCH" "$SANDBOX/proj" --agent Allgemein --continue || fail "Start fehlgeschlagen"
   log="$(stub_log omarchy-launch-or-focus)"
-  assert_contains "$log" "--agent Allgemein"
+  assert_contains "$log" "OPENCODE_CONFIG_CONTENT="
+  assert_contains "$log" 'default_agent'
+  assert_contains "$log" 'Allgemein'
+  assert_not_contains "$log" "--agent"
   # Minor aus der Review: "-c" allein ist auch Teilkette von "--continue"
   # selbst ("--continue"[1:3] == "-c") -- ein Test, der "--continue" statt
   # des kurzen "-c"-Flags loggen wuerde, bestuende trotzdem. Das Skript haengt

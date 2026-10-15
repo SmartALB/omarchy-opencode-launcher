@@ -3,9 +3,9 @@
 An Omarchy bar widget that opens [opencode](https://opencode.ai) in a
 project directory, with the model chosen before opencode starts.
 
-The model travels as a command-line flag: opencode is started as
-`opencode -m provider/model`. **Your `~/.config/opencode/opencode.json` is
-never written to.** That is the whole point of this widget -- picking a
+The model travels in process-local `OPENCODE_CONFIG_CONTENT` when opencode is
+started. **Your `~/.config/opencode/opencode.json` is never written to.** That
+is the whole point of this widget -- picking a
 model changes nothing on disk except this plugin's own state, so opencode's
 own configuration stays exactly as you left it, and running another opencode
 session at the same time is never a race over a shared file.
@@ -128,9 +128,9 @@ was recently used in.
 ## How it works
 
 Each project row remembers the model chosen for it the last time it was
-started. Pressing the row starts opencode as `opencode -m provider/model`
-in that project's directory -- the model is a flag on the process, nothing
-is written into opencode's own configuration.
+started. Pressing the row starts opencode with a process-local model override
+in `OPENCODE_CONFIG_CONTENT`. Nothing is written into opencode's own
+configuration.
 
 ### The project row
 

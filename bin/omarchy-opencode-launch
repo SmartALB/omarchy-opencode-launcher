@@ -67,9 +67,23 @@ cmd="$cmd --dir=$(printf %q "$dir")"
 # dort aber nicht zwingend denselben Eintrag (z.B. ~/.local/bin) enthaelt wie
 # die Shell dieses Skripts. Ohne diese Zeile waere OPENCODE_BIN nur fuer die
 # Existenzpruefung wirksam, nie fuer den tatsaechlichen Start.
-cmd="$cmd -e $(printf %q "$OPENCODE")"
-[ -n "$model" ] && cmd="$cmd -m $(printf %q "$model")"
-[ -n "$agent" ] && cmd="$cmd --agent $(printf %q "$agent")"
+# OpenCode V2 hat die alten CLI-Flags -m/--model und --agent entfernt.
+# OPENCODE_CONFIG_CONTENT wird ueber die globale Konfiguration gelegt, gilt
+# nur fuer diesen Prozess und schreibt keine Konfigurationsdatei.
+inline_config=""
+if [ -n "$model" ] || [ -n "$agent" ]; then
+  inline_config="$("$BIN_JQ" -cn --arg model "$model" --arg agent "$agent" '
+    {}
+    + (if $model != "" then {model: $model} else {} end)
+    + (if $agent != "" then {default_agent: $agent} else {} end)
+  ')" || { echo "$ME: could not build OpenCode configuration" >&2; exit 6; }
+fi
+
+cmd="$cmd -e"
+if [ -n "$inline_config" ]; then
+  cmd="$cmd env OPENCODE_CONFIG_CONTENT=$(printf %q "$inline_config")"
+fi
+cmd="$cmd $(printf %q "$OPENCODE")"
 [ "$cont" = true ] && cmd="$cmd -c"
 
 # stdin/stdout/stderr werden abgekoppelt. Ohne das erbt das gestartete
