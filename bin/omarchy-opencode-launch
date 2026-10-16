@@ -84,6 +84,17 @@ if [ -n "$inline_config" ]; then
   cmd="$cmd env OPENCODE_CONFIG_CONTENT=$(printf %q "$inline_config")"
 fi
 cmd="$cmd $(printf %q "$OPENCODE")"
+# opencode 2.x startet per Default den geteilten, abgekoppelten Background-
+# Service (serve --service), der TUI-Clients bewusst ueberdauert. Dieser
+# Launcher oeffnet aber jede Sitzung in einer EIGENEN transienten
+# uwsm-app/xdg-terminal-exec-Scope; der Service landet in deren cgroup und
+# bleibt beim Fensterschliessen dort liegen. Ein systemd-Scope wird erst
+# freigegeben, wenn sein cgroup leer ist -- also haelt der zurueckgebliebene
+# Service den Wegwerf-Scope (und seine LM-Studio-/MCP-Verbindungen) endlos am
+# Leben. --standalone bindet stattdessen einen privaten "serve --stdio"-Server
+# als Kind an die TUI, der mit dem Fenster stirbt. Verhaltensmaessig
+# verifiziert: Client-Tod killt den stdio-Server, kein reparentetes Waisenkind.
+cmd="$cmd --standalone"
 [ "$cont" = true ] && cmd="$cmd -c"
 
 # stdin/stdout/stderr werden abgekoppelt. Ohne das erbt das gestartete

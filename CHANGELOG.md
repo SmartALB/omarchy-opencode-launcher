@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.2 -- 2026-10-16
+
+Launched sessions now use OpenCode's `--standalone` flag, giving each window a
+private server that exits with it. Previously the launcher opened every session
+in its own transient uwsm/xdg-terminal-exec scope, while OpenCode V2's shared
+background service (`serve --service`) detaches and persists; on window close
+that service stayed behind in the scope's cgroup, keeping the scope -- and its
+model/provider connections -- alive indefinitely. A private server has no reason
+to outlive its window, so closing the window now tears it down cleanly.
+
 ## 1.1.1 -- 2026-10-15
 
 Launching a selected model or agent now works with OpenCode V2. Selections are

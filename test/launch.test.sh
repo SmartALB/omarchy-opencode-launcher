@@ -38,6 +38,23 @@ test_e_flag_traegt_den_aufgeloesten_opencode_pfad_nicht_bare_opencode() {
   assert_contains "$(stub_log omarchy-launch-or-focus)" "-e $SANDBOX/stub/opencode"
 }
 
+test_start_startet_opencode_standalone_nicht_am_background_service() {
+  setup_launch
+  # opencode 2.x startet per Default den geteilten, abgekoppelten
+  # Background-Service (serve --service), der TUI-Clients ueberdauert. In der
+  # transienten uwsm-app/xdg-terminal-exec-Scope dieses Launchers bleibt der
+  # Service beim Fensterschliessen im Scope-cgroup liegen und haelt den Scope
+  # (und seine LM-Studio-Verbindungen) am Leben -- genau das Modell-Nachladen
+  # nach dem Schliessen. --standalone bindet stattdessen einen privaten
+  # "serve --stdio"-Server als Kind an die TUI, der mit dem Fenster stirbt
+  # (verhaltensmaessig verifiziert: Client-Tod killt den stdio-Server, kein
+  # reparentetes Waisenkind). Der Flag muss am tatsaechlich gestarteten Binary
+  # haengen, nicht irgendwo in der Zeile -- deshalb an "<opencode> --standalone"
+  # verankert, nicht nur an "--standalone".
+  "$LAUNCH" "$SANDBOX/proj" || fail "Start fehlgeschlagen"
+  assert_contains "$(stub_log omarchy-launch-or-focus)" "$SANDBOX/stub/opencode --standalone"
+}
+
 test_start_mit_modell_enthaelt_v2_inline_config() {
   setup_launch
   "$LAUNCH" "$SANDBOX/proj" --model lmstudio/openai/gpt-oss-20b || fail "Start fehlgeschlagen"
